@@ -22,8 +22,10 @@
   World.pois = [];
   World.spawn = { x: SIZE / 2 + 0.5, y: SIZE / 2 + 0.5, a: -Math.PI / 2 };
   World.isWater = function (t) { return t === 5; };
-  /* 每格墙高（世界单位，1 = 一格方块）：树/仙人掌更高，形成真正的轮廓 */
-  World.wallHeight = [1, 1, 1, 1, 1, 2.3, 1.8, 1.5, 1, 1];
+  /* 每格墙高（世界单位，1 = 一格方块）：3D 化后这直接决定轮廓
+     规则：玩家眼高 0.62 → 建筑墙必须明显高于眼高才有"建筑感"；
+           树干必须高于树冠，才能看出是一棵树 */
+  World.wallHeight = [1, 2.0, 1.9, 2.2, 1.7, 3.2, 2.2, 1.6, 1.0, 3.0];
 
   function idx(x, y) { return y * SIZE + x; }
 

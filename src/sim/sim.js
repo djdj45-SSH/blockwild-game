@@ -354,7 +354,7 @@
     if (p.comboT > 0) { p.comboT -= dt; if (p.comboT <= 0) p.combo = 0; }
 
     if (inp.turn) p.a += inp.turn * dt;
-    if (inp.pitch) p.pitchBase = Core().clamp(p.pitchBase + inp.pitch * dt, -0.34, 0.34);
+    if (inp.pitch) p.pitchBase = Core().clamp(p.pitchBase + inp.pitch * dt, -1.30, 1.30);
     p.pitch = p.pitchBase + p.kickPitch;
     p.viewOffsetY = Math.sin(G.time * 41 + p.id) * p.viewShake * 3.2;
 
@@ -464,7 +464,7 @@
     const mag = Math.hypot(fwd, strafe);
     if (mag > 1) { fwd /= mag; strafe /= mag; }
     if (inp.turn) p.a += inp.turn * dt;
-    if (inp.pitch) p.pitchBase = Core().clamp(p.pitchBase + inp.pitch * dt, -0.34, 0.34);
+    if (inp.pitch) p.pitchBase = Core().clamp(p.pitchBase + inp.pitch * dt, -1.30, 1.30);
     p.pitch = p.pitchBase + (p.kickPitch || 0);
     const inWater = PP.World.inWater(p.x, p.y);
     // 与 updatePlayer 同规则：后退不能冲刺

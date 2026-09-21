@@ -248,7 +248,7 @@
       if (lockGrace > 0) return;                       // 刚锁定的前几帧忽略
       const sens = 0.0022 * (PP.Settings ? PP.Settings.data.mouseSens : 1);
       p.a += mx * sens;
-      p.pitchBase = PP.Core.clamp(p.pitchBase - my * sens * 0.9, -0.34, 0.34);
+      p.pitchBase = PP.Core.clamp(p.pitchBase - my * sens * 0.9, -1.30, 1.30);
       if (mode === 'online') p.pitch = p.pitchBase;
     });
     ROOT.addEventListener('wheel', (e) => {
@@ -321,7 +321,7 @@
     if (!p || p.eliminated) return;
     const s = PP.Touch.LOOK_SENS;
     p.a += l.dx * s;
-    p.pitchBase = PP.Core.clamp(p.pitchBase - l.dy * s * 0.9, -0.34, 0.34);
+    p.pitchBase = PP.Core.clamp(p.pitchBase - l.dy * s * 0.9, -1.30, 1.30);
     if (mode === 'online') p.pitch = p.pitchBase;
   }
 

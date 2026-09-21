@@ -93,7 +93,7 @@ const FILES = [
   'src/core.js', 'src/art.js', 'src/audio.js',
   'src/sim/weapons.js', 'src/sim/roguelike.js', 'src/sim/world.js',
   'src/sim/entities.js', 'src/sim/sim.js', 'src/sim/snapshot.js',
-  'src/client/render.js', 'src/client/hud.js', 'src/client/settings.js',
+  'src/client/render3d.js', 'src/client/hud.js', 'src/client/settings.js',
   'src/client/net.js', 'src/client/touch.js', 'src/client/game.js'
 ];
 for (const f of FILES) {
@@ -483,8 +483,18 @@ function shot(name, setup) {
     const a = PP.Ent.spawn(G2, 'skeleton', poi.x + 2.5, poi.y); a.spawnT = 0; a.windup = 0.3;
     G2.projectiles.push({ x: poi.x + 1.4, y: poi.y, z: 0.62, vx: 1, vy: 0, vz: 0, dmg: 9, life: 2 });
   });
+  // 3D 相机验收：抬头看塔顶 / 低头看地面
+  shot('v3_lookup.png', () => {
+    let poi = W.pois.find(p => p.type === 'tower') || W.pois[2];
+    G2.player.x = poi.x + 4; G2.player.y = poi.y; G2.player.a = Math.PI + 0.0; G2.player.pitch = 0.85;
+    G2.player.pitchBase = 0.85; G2.weapon = 0;
+  });
+  shot('v3_lookdown.png', () => {
+    G2.player.pitch = -0.9; G2.player.pitchBase = -0.9; G2.player.a = 2.6; G2.weapon = 1;
+    const a = PP.Ent.spawn(G2, 'zombie', G2.player.x + 2.5, G2.player.y + 0.6); a.spawnT = 0;
+  });
 } catch (ex) { rerr = ex; }
-ok(rerr === null, '渲染 3 个场景无异常' + (rerr ? ' -> ' + rerr.stack : ''));
+ok(rerr === null, '渲染 5 个场景无异常' + (rerr ? ' -> ' + rerr.stack : ''));
 
 // 性能参考：移动端画质档位下的渲染耗时
 PP.Render.quality = 0.55; PP.Render.resize();
