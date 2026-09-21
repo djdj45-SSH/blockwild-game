@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>方块荒野 BLOCKWILD · 第一人称像素射击</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<div id="stage">
+  <canvas id="view" width="400" height="225"></canvas>
+
+  <div id="vignette"></div>
+  <div id="blood"></div>
+  <div id="scanlines"></div>
+
+  <!-- ================= HUD ================= -->
+  <div id="hud" class="hide">
+    <div class="hud-tl">
+      <div class="stat">
+        <span class="label">HP</span>
+        <div class="bar"><div id="hp-bar" class="fill hp"></div></div>
+        <span id="hp-num" class="num">100</span>
+      </div>
+      <div class="stat sub">
+        <span class="label">AP</span>
+        <div class="bar thin"><div id="ap-bar" class="fill ap"></div></div>
+        <span id="ap-num" class="num">0</span>
+      </div>
+      <div class="stat sub">
+        <span class="label" id="level">Lv.1</span>
+        <div class="bar thin"><div id="xp-bar" class="fill xp"></div></div>
+      </div>
+      <div id="mates"></div>
+    </div>
+
+    <div class="hud-tr">
+      <div class="row big"><span class="label">SCORE</span><span id="score" class="val">0</span></div>
+      <div class="row"><span class="label">威胁</span><span id="threat" class="val">1</span></div>
+      <div class="row"><span class="label">KILLS</span><span id="kills" class="val">0</span></div>
+      <div id="combo" class="combo hide">x1.0</div>
+    </div>
+
+    <div class="hud-bl">
+      <div class="wpn active" id="wp0"><b>1</b><span>铁手铳</span><i id="w0">&infin;</i></div>
+      <div class="wpn locked" id="wp1"><b>2</b><span>双管猎枪</span><i id="w1">--</i></div>
+      <div class="wpn locked" id="wp2"><b>3</b><span>红石脉冲</span><i id="w2">--</i></div>
+    </div>
+
+    <div class="hud-br">
+      <div id="wname">铁手铳</div>
+      <div id="waffix"></div>
+      <div class="ammo"><span id="ammo">12</span><em>/</em><span id="reserve">&infin;</span></div>
+      <div id="reload" class="reload hide">装填中</div>
+    </div>
+
+    <div id="net" class="net hide"></div>
+    <div id="lockhint" class="lockhint hide">点击画面锁定鼠标</div>
+    <div id="revive" class="revive hide">
+      <div id="revive-text">按住 E 救援</div>
+      <div class="rbar"><div id="revive-bar" class="rfill"></div></div>
+    </div>
+
+    <div id="perk" class="perk hide">
+      <div class="perkbox">
+        <h3>选择强化</h3>
+        <div id="perk-cards"></div>
+      </div>
+    </div>
+
+    <div id="crosshair"><i></i><i></i><i></i><i></i><b></b></div>
+    <div id="hitmark"></div>
+    <div id="popup"></div>
+    <div id="banner"></div>
+    <div id="toast"></div>
+  </div>
+
+  <!-- ================= 移动端触控（横屏） ================= -->
+  <div id="touch" class="hide">
+    <div id="t-left"></div>
+    <div id="t-right"></div>
+    <div id="t-base"></div>
+    <div id="t-knob"></div>
+    <div class="tbtns">
+      <button class="tbtn fire" data-btn="fire">射击</button>
+      <button class="tbtn" data-btn="reload">装填</button>
+      <button class="tbtn" data-btn="weapon">换枪</button>
+      <button class="tbtn" data-btn="revive">救援</button>
+    </div>
+    <button class="tbtn sprint" data-btn="sprint">疾跑</button>
+    <button class="tbtn pausebtn" data-btn="pause">❚❚</button>
+  </div>
+
+  <div id="rotate">
+    <div class="rotbox">
+      <div class="roticon"></div>
+      <p>请横屏游玩</p>
+    </div>
+  </div>
+
+  <div id="settings" class="hide">
+    <div class="setbox">
+      <h3>设置</h3>
+      <div class="setsec">
+        <div class="srow"><span>音量</span><input type="range" id="set-volume" min="0" max="100" step="1" /><b id="set-volume-txt">60%</b></div>
+        <div class="srow"><span>静音</span><input type="checkbox" id="set-mute" /></div>
+      </div>
+      <div class="setsec">
+        <div class="srow"><span>鼠标灵敏度</span><input type="range" id="set-sens" min="0.3" max="3" step="0.05" /><b id="set-sens-txt">1.00x</b></div>
+        <div class="srow"><span>画质</span>
+          <select id="set-quality">
+            <option value="0.4">低（省电）</option>
+            <option value="0.7">中</option>
+            <option value="1">高</option>
+          </select>
+        </div>
+        <div class="srow"><span>队友伤害</span>
+          <select id="set-ff">
+            <option value="0">关闭</option>
+            <option value="0.35">35%（默认）</option>
+            <option value="1">100%</option>
+          </select>
+        </div>
+      </div>
+      <div class="setsec">
+        <div class="ktitle">键位（点击按钮后按新键 · ESC 取消）</div>
+        <div id="set-keys"></div>
+      </div>
+      <div class="setbtns">
+        <button id="set-reset" class="btn ghost">恢复默认</button>
+        <button id="set-close" class="btn">完成</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= TITLE ================= -->
+  <div id="s-title" class="screen">
+    <div class="panel">
+      <h1>方块<span>荒野</span></h1>
+      <p class="tag">BLOCKWILD · 开放世界 · 第一人称像素射击</p>
+      <div class="brief">
+        一片程序生成的方块大陆，怪物从林子、废墟和沙漠里不断涌来。<br />
+        找到<b>补给箱</b>换更好的枪，活得更久，走得更远。
+      </div>
+      <div class="keys">
+        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移动</div>
+        <div><kbd>MOUSE</kbd> 瞄准 / 转视角</div>
+        <div><kbd>左键</kbd> 射击</div>
+        <div><kbd>R</kbd> 装填</div>
+        <div><kbd>SHIFT</kbd> 疾跑</div>
+        <div><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 切换武器</div>
+        <div><kbd>F</kbd> 救援倒地队友</div>
+        <div><kbd>ESC</kbd> 暂停 · <kbd>M</kbd> 静音</div>
+      </div>
+      <div class="lobby">
+        <input id="inp-name" maxlength="12" placeholder="你的名字" />
+        <input id="inp-addr" placeholder="服务器地址 如 192.168.1.5:8080" />
+      </div>
+      <div class="lobbybtns">
+        <button id="btn-solo" class="btn">单人开始</button>
+        <button id="btn-online" class="btn alt">局域网联机</button>
+        <button id="btn-set-title" class="btn ghost">设置</button>
+      </div>
+      <p class="tiny">
+        联机：先在任意一台机器上跑 <b>node server.js</b>，其他人用浏览器打开它打印的局域网地址 → 填名字 → 点“局域网联机”。人数无上限。<br />
+        小地图黄点 = 补给箱，蓝点 = 队友，橙点 = 倒地队友
+      </p>
+    </div>
+  </div>
+
+  <!-- ================= PAUSE ================= -->
+  <div id="s-pause" class="screen hide">
+    <div class="panel small">
+      <h2>已暂停</h2>
+      <div class="keys compact">
+        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移动 · <kbd>SHIFT</kbd> 疾跑</div>
+        <div><kbd>左键</kbd> 射击 · <kbd>R</kbd> 装填 · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 换枪</div>
+      </div>
+      <div class="qset">
+        <span>画质</span>
+        <button class="qbtn" data-q="0.4">低</button>
+        <button class="qbtn" data-q="0.7">中</button>
+        <button class="qbtn" data-q="1">高</button>
+      </div>
+      <button id="btn-resume" class="btn">继续游戏</button>
+      <button id="btn-restart-p" class="btn ghost">重新开始</button>
+      <button id="btn-set-pause" class="btn ghost">设置</button>
+    </div>
+  </div>
+
+  <!-- ================= GAME OVER ================= -->
+  <div id="s-over" class="screen hide">
+    <div class="panel small">
+      <h2 class="dead">你死了</h2>
+      <div class="stats">
+        <div><span>最终得分</span><b id="o-score">0</b></div>
+        <div><span>存活时间</span><b id="o-time">0:00</b></div>
+        <div><span>威胁等级</span><b id="o-threat">0</b></div>
+        <div><span>击杀总数</span><b id="o-kills">0</b></div>
+        <div><span>爆头数</span><b id="o-head">0</b></div>
+        <div><span>命中率</span><b id="o-acc">0%</b></div>
+        <div><span>最高连击</span><b id="o-combo">0</b></div>
+      </div>
+      <button id="btn-restart" class="btn">再来一次</button>
+    </div>
+  </div>
+</div>
+
+<script src="src/core.js"></script>
+<script src="src/art.js"></script>
+<script src="src/audio.js"></script>
+<script src="src/sim/weapons.js"></script>
+<script src="src/sim/roguelike.js"></script>
+<script src="src/sim/world.js"></script>
+<script src="src/sim/entities.js"></script>
+<script src="src/sim/sim.js"></script>
+<script src="src/sim/snapshot.js"></script>
+<script src="src/client/render.js"></script>
+<script src="src/client/hud.js"></script>
+<script src="src/client/settings.js"></script>
+<script src="src/client/net.js"></script>
+<script src="src/client/touch.js"></script>
+<script src="src/client/game.js"></script>
+</body>
+</html>

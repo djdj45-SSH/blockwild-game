@@ -1,0 +1,503 @@
+/* ============================================================
+   tools/verify.js — 无头验证 + 渲染帧导出 PNG
+   用法: node tools/verify.js
+   （不需要浏览器：用最小 DOM / Canvas 桩把整个游戏跑起来）
+   ============================================================ */
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const zlib = require('zlib');
+
+const ROOT = global;
+ROOT.window = ROOT;
+const HERE = __dirname;
+const PROJ = path.join(HERE, '..');
+
+/* ---------------- PNG 编码 ---------------- */
+let CRC_T = null;
+function crc32(buf) {
+  if (!CRC_T) {
+    CRC_T = new Int32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; CRC_T[n] = c; }
+  }
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC_T[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function chunk(type, data) {
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([len, body, crc]);
+}
+function writePNG(file, w, h, rgba) {
+  const raw = Buffer.alloc((w * 4 + 1) * h);
+  for (let y = 0; y < h; y++) {
+    raw[y * (w * 4 + 1)] = 0;
+    Buffer.from(rgba.buffer, rgba.byteOffset + y * w * 4, w * 4).copy(raw, y * (w * 4 + 1) + 1);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 6;
+  const png = Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level: 9 })), chunk('IEND', Buffer.alloc(0))
+  ]);
+  fs.writeFileSync(file, png);
+}
+
+/* ---------------- DOM / Canvas 桩 ---------------- */
+let captured = null;
+function makeCtx() {
+  return {
+    imageSmoothingEnabled: false, fillStyle: '', strokeStyle: '', lineWidth: 1,
+    globalCompositeOperation: 'source-over',
+    createImageData: (a, b) => ({ width: a, height: b, data: new Uint8ClampedArray(a * b * 4) }),
+    putImageData: (img) => { captured = img; },
+    fillRect: () => { }, strokeRect: () => { }, clearRect: () => { },
+    beginPath: () => { }, moveTo: () => { }, lineTo: () => { }, stroke: () => { },
+    createRadialGradient: () => ({ addColorStop: () => { } }), drawImage: () => { }
+  };
+}
+const canvasStub = { width: 400, height: 225, style: {}, getContext: () => makeCtx(), addEventListener: () => { }, requestPointerLock: () => { lockCount++; } };
+let lockCount = 0;
+const listeners = {};
+function makeEl(id) {
+  return {
+    id, style: {}, textContent: '', offsetWidth: 0, parentNode: null,
+    classList: {
+      _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); },
+      toggle(c, f) { f === undefined ? (this._s.has(c) ? this._s.delete(c) : this._s.add(c)) : (f ? this._s.add(c) : this._s.delete(c)); },
+      contains(c) { return this._s.has(c); }
+    },
+    addEventListener: (t, f) => { (listeners[id] = listeners[id] || {})[t] = f; },
+    appendChild: (c) => { c.parentNode = { removeChild: () => { } }; return c; }, removeChild: () => { },
+    querySelector: () => makeEl('q'), remove: () => { }
+  };
+}
+const els = {};
+ROOT.document = {
+  readyState: 'complete', pointerLockElement: null,
+  body: { classList: { add() { }, remove() { }, toggle() { } } },
+  getElementById: (id) => id === 'view' ? canvasStub : (els[id] || (els[id] = makeEl(id))),
+  createElement: () => makeEl('tmp'), addEventListener: () => { }, exitPointerLock: () => { },
+  querySelectorAll: () => [], querySelector: () => null, documentElement: {}
+};
+let rafCb = null;
+ROOT.requestAnimationFrame = (fn) => { rafCb = fn; return 1; };
+ROOT.addEventListener = (t, f) => { (listeners.__win = listeners.__win || {})[t] = f; };
+ROOT.innerWidth = 1280; ROOT.innerHeight = 720;
+
+/* ---------------- 加载源码 ---------------- */
+const FILES = [
+  'src/core.js', 'src/art.js', 'src/audio.js',
+  'src/sim/weapons.js', 'src/sim/roguelike.js', 'src/sim/world.js',
+  'src/sim/entities.js', 'src/sim/sim.js', 'src/sim/snapshot.js',
+  'src/client/render.js', 'src/client/hud.js', 'src/client/settings.js',
+  'src/client/net.js', 'src/client/touch.js', 'src/client/game.js'
+];
+for (const f of FILES) {
+  vm.runInThisContext(fs.readFileSync(path.join(PROJ, f), 'utf8'), { filename: f });
+}
+const PP = ROOT.PP;
+
+let fails = 0;
+function ok(cond, msg) { console.log((cond ? '  PASS  ' : '  FAIL  ') + msg); if (!cond) fails++; }
+
+/* ================= 1. 美术 ================= */
+console.log('[ART]');
+ok(PP.Art.wallTex.length === 9, '9 张墙面方块纹理');
+ok(PP.Art.floorTex.length === 7, '7 张地面方块纹理');
+ok(!!PP.Art.sprites.zombie && !!PP.Art.sprites.husk && !!PP.Art.sprites.skeleton, '3 种怪物精灵');
+let nz = 0; for (const c of PP.Art.sprites.zombie.walk.data) if (c !== 0) nz++;
+ok(nz > 120, '僵尸精灵非空像素 = ' + nz);
+ok(PP.Art.weaponGfx.length === 3, '3 把方块枪');
+
+/* ================= 2. 开放世界 ================= */
+console.log('[WORLD]');
+const W = PP.World;
+const t0 = Date.now();
+W.generate(12345);
+const genMs = Date.now() - t0;
+ok(W.wall.length === 192 * 192, '世界尺寸 192x192 = ' + (192 * 192) + ' 格');
+ok(genMs < 3000, '世界生成耗时 ' + genMs + 'ms');
+ok(W.pois.length > 15, 'POI 数量 = ' + W.pois.length);
+
+// 连通性（洪水填充）
+const SIZE = W.SIZE;
+const seen = new Uint8Array(SIZE * SIZE);
+const stack = [(SIZE / 2) | 0, (SIZE / 2) | 0];
+seen[((SIZE / 2) | 0) * SIZE + ((SIZE / 2) | 0)] = 1;
+let reach = 0;
+const st = [[(SIZE / 2) | 0, (SIZE / 2) | 0]];
+while (st.length) {
+  const [x, y] = st.pop(); reach++;
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const nx = x + dx, ny = y + dy;
+    if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) continue;
+    const i = ny * SIZE + nx;
+    if (seen[i] || W.wall[i] !== 0) continue;
+    seen[i] = 1; st.push([nx, ny]);
+  }
+}
+let floorN = 0; for (let i = 0; i < SIZE * SIZE; i++) if (W.wall[i] === 0) floorN++;
+ok(reach / floorN > 0.9, '可达地面占比 ' + (reach / floorN * 100).toFixed(1) + '% (' + reach + '/' + floorN + ')');
+ok(!W.isWall(W.spawn.x, W.spawn.y), '出生点不在墙里');
+// POI 内部可达性（宝箱能拿到）
+let poiReach = 0;
+for (const p of W.pois) {
+  let good = false;
+  const cx = p.x | 0, cy = p.y | 0;
+  for (let dy = -1; dy <= 1 && !good; dy++) for (let dx = -1; dx <= 1 && !good; dx++) {
+    const i = (cy + dy) * SIZE + (cx + dx);
+    if (i >= 0 && i < SIZE * SIZE && seen[i]) good = true;
+  }
+  if (good) poiReach++;
+}
+ok(poiReach / W.pois.length > 0.95, '可达 POI 占比 ' + (poiReach / W.pois.length * 100).toFixed(0) + '%');
+
+// 相同种子 → 相同世界（联机前提）
+W.generate(777);
+const a = W.wall.slice(0, 4096);
+W.generate(778);
+const b = W.wall.slice(0, 4096);
+W.generate(777);
+const c = W.wall.slice(0, 4096);
+let sameAB = a.every((v, i) => v === b[i]);
+let sameAC = a.every((v, i) => v === c[i]);
+ok(!sameAB, '不同种子 → 不同世界');
+ok(sameAC, '相同种子 → 完全一致的世界（可用于联机 seed 同步）');
+
+/* ================= 3. 模拟 ================= */
+console.log('[SIM]');
+ok(typeof rafCb === 'function', '主循环已注册');
+// 固定随机源，让整条测试可复现（Sim.create 未传 seed 时内部用 Math.random）
+const detRandom = PP.Core.mulberry32(90210);
+ROOT.Math.random = detRandom;
+listeners['btn-solo'].click();
+const G = PP.G || null;
+ok(G.state === 'playing', '点击开始 → playing');
+
+let t = 0;
+function tick(n) { for (let i = 0; i < n; i++) { t += 16.7; rafCb(t); } }
+tick(2);
+
+let err = null, shots = 0, maxHpLost = 0, perkClickCount = 0;
+try {
+  for (let i = 0; i < 4200; i++) {
+    // 主动索敌：朝最近的活敌人推进（走墙滑动），看得见就开枪
+    let best = null, bd = 1e9;
+    for (const e of G.enemies) {
+      if (e.state !== 'alive') continue;
+      const d = Math.hypot(e.x - G.player.x, e.y - G.player.y);
+      if (d < bd) { bd = d; best = e; }
+    }
+    if (best) {
+      G.player.a = Math.atan2(best.y - G.player.y, best.x - G.player.x);
+      // 像真人一样拉扯：太远就靠近，太近就后退，中距侧移
+      let mvx = 0, mvy = 0;
+      if (bd > 8) { mvx = Math.cos(G.player.a); mvy = Math.sin(G.player.a); }
+      else if (bd < 5) { mvx = -Math.cos(G.player.a); mvy = -Math.sin(G.player.a); }
+      else { mvx = Math.cos(G.player.a + 1.57) * 0.8; mvy = Math.sin(G.player.a + 1.57) * 0.8; }
+      const STEP = 0.15;   // 玩家疾跑约 4.9 格/秒 = 0.16/帧，bot 用 0.15
+      let nx = G.player.x + mvx * STEP, ny = G.player.y + mvy * STEP;
+      if (!W.circleBlocked(nx, ny, G.player.radius)) { G.player.x = nx; G.player.y = ny; }
+      else {
+        nx = G.player.x + Math.cos(G.player.a + 1.3) * STEP;
+        ny = G.player.y + Math.sin(G.player.a + 1.3) * STEP;
+        if (!W.circleBlocked(nx, ny, G.player.radius)) { G.player.x = nx; G.player.y = ny; }
+      }
+      if (bd < 12 && W.losClear(G.player.x, G.player.y, best.x, best.y) && i % 12 === 0) {
+        if (listeners['stage'] && listeners['stage'].mousedown) { listeners['stage'].mousedown({ button: 0 }); shots++; }
+      }
+    }
+    // 升级弹窗会自动暂停（单机），测试 bot 必须"点卡"才能继续
+    // 升级弹窗会自动暂停（单机：避免一边挨打一边选卡），bot 模拟"点一张卡"继续
+    const pickPerk = () => {
+      if (!(PP.Hud.perksOpen() && PP.Hud._perkCb && PP.Hud._perkList && PP.Hud._perkList.length)) return false;
+      const pid = PP.Hud._perkList[0].id;
+      PP.Hud.hidePerks();          // 与真实点击卡片一致：先关窗再回调
+      PP.Hud._perkCb(pid);
+      perkClickCount++;
+      return true;
+    };
+    pickPerk();
+    maxHpLost = Math.max(maxHpLost, 100 - G.player.hp);
+    tick(1);
+    pickPerk();                    // tick 中途触发的升级
+    if (G.state === 'over') break;
+  }
+} catch (ex) { err = ex; }
+ok(err === null, '70 秒模拟无异常' + (err ? ' -> ' + err.stack : ''));
+console.log('       威胁=' + G.threat + ' 击杀=' + G.kills + ' 得分=' + G.score +
+  ' HP=' + Math.round(G.player.hp) + ' 存活敌人=' + G.enemies.filter(e => e.state === 'alive').length +
+  ' 状态=' + G.state + ' 开火=' + shots + ' 最大掉血=' + Math.round(maxHpLost) + ' 选卡=' + perkClickCount);
+ok(G.kills >= 6, '击杀数 = ' + G.kills);
+ok(G.threat >= 2, '威胁等级提升到 ' + G.threat);
+ok(G.pickups.filter(p => p.kind === 'chest').length > 10, '地图上补给箱 = ' + G.pickups.filter(p => p.kind === 'chest').length);
+
+/* ================= 4. 命中判定 ================= */
+console.log('[HITSCAN]');
+const G2 = PP.G;
+G2.enemies.length = 0; G2.projectiles.length = 0;
+// 找一块从玩家位置出发、3 格外且通视的空地（开放世界里不能假设正前方无遮挡）
+let spot = null;
+for (let a = 0; a < 6.28 && !spot; a += 0.2) {
+  for (const d of [3, 4, 5]) {
+    const x = G2.player.x + Math.cos(a) * d, y = G2.player.y + Math.sin(a) * d;
+    if (!W.isWallTile(x | 0, y | 0) && W.losClear(G2.player.x, G2.player.y, x, y) && Math.abs(a - Math.PI / 2) > 0.5) { spot = { x: x, y: y, a: a }; break; }
+  }
+}
+ok(!!spot, '找到通视测试点');
+G2.player.pitch = 0; G2.player.pitchBase = 0; G2.player.kickPitch = 0;
+const z1 = PP.Ent.spawn(G2, 'zombie', spot.x, spot.y);
+z1.spawnT = 0;
+let hits = PP.Ent.hitscan(G2, G2.player, spot.a, 0, 0, 40, 1);
+ok(hits.length > 0 && hits[0].kind === 'enemy', '正前方敌人被命中');
+ok(hits.length && hits[0].head === false, '平视命中躯干');
+G2.player.pitch = 0.16;
+hits = PP.Ent.hitscan(G2, G2.player, spot.a, 0.16, 0, 40, 1);
+ok(hits.length && hits[0].head === true, '抬头 → 爆头');
+G2.player.pitch = -0.3;
+ok(PP.Ent.hitscan(G2, G2.player, spot.a, -0.3, 0, 40, 1).length === 0, '朝脚下不命中');
+G2.player.pitch = 0;
+ok(PP.Ent.hitscan(G2, G2.player, spot.a + Math.PI, 0, 0, 40, 1).length === 0, '背向不命中');
+
+// 近战伤害（确定性：贴脸放一只僵尸）
+{
+  const GD = PP.Sim.create(4242, { solo: true });
+  const me = PP.Sim.addPlayer(GD, 1, 'T');
+  GD.me = me;
+  me.hp = 100; me.ap = 0;
+  const z = PP.Ent.spawn(GD, 'zombie', me.x + 1.0, me.y); z.spawnT = 0;
+  for (let i = 0; i < 60; i++) PP.Sim.tick(GD);
+  ok(me.hp < 100, '僵尸贴脸能打到玩家（掉血 ' + (100 - me.hp).toFixed(0) + '）');
+  // 后退不能疾跑：朝后走 3 秒的位移应明显小于朝前疾跑
+  const mk = (fwd, sprint) => {
+    const g2 = PP.Sim.create(4242, { solo: true });
+    const p2 = PP.Sim.addPlayer(g2, 9, 'M'); g2.me = p2;
+    p2.x = PP.World.spawn.x; p2.y = PP.World.spawn.y; p2.a = 0;
+    const x0 = p2.x;
+    for (let i = 0; i < 90; i++) {
+      PP.Sim.setInput(g2, 9, { fwd: fwd, strafe: 0, sprint: sprint });
+      PP.Sim.tick(g2);
+    }
+    return Math.abs(p2.x - x0);
+  };
+  const back = mk(-1, true), fwdRun = mk(1, true);
+  ok(back < fwdRun * 0.6, '后退不能疾跑（后退 ' + back.toFixed(1) + ' 格 < 前冲 ' + fwdRun.toFixed(1) + ' 格 × 0.6）');
+}
+
+/* ================= 5. 肉鸽层 ================= */
+console.log('[ROGUE]');
+const G3 = PP.G;
+const me = PP.Sim.makePlayer(G3, 77, '测试兵');   // 用全新角色，避免被上面的战局状态影响
+const inst = PP.Rogue.rollWeapon(G3.rng, 1, 4);
+ok(inst.rarity >= 0 && inst.rarity < 5, '武器稀有度 = ' + PP.Rogue.RARITY[inst.rarity].cn);
+ok(inst.affixes.length <= 4, '词条数 = ' + inst.affixes.length);
+const rst = PP.Rogue.stats(inst, {});
+ok(rst.dmg > 0 && rst.mag > 0 && rst.cd > 0, '词条合成后的武器数值有效 dmg=' + rst.dmg.toFixed(1) + ' mag=' + rst.mag);
+const inst0 = { def: 0, rarity: 0, affixes: [] };
+const base = PP.Rogue.stats(inst0, {});
+const buffed = PP.Rogue.stats(inst0, { dmg: 0.15 });
+ok(Math.abs(buffed.dmg - base.dmg * 1.15) < 0.01, 'Perk 伤害加成生效');
+// 升级 / Perk
+const lv0 = me.level;
+PP.Ent.grantXp(G3, me, 500);
+ok(me.level > lv0, '击杀获得经验并升级 Lv.' + me.level);
+ok(me.pendingPerks > 0, '产生待选强化 x' + me.pendingPerks);
+const choices = PP.Sim.rollPerkChoices(G3, me);
+ok(choices.length === 3, 'Perk 三选一 = ' + choices.length + ' 个');
+const hpBefore = me.maxHp, perksBefore = me.perks.length;
+PP.Sim.choosePerk(G3, me, choices[0].id);
+ok(me.perks.length === perksBefore + 1, '成功选择强化：' + choices[0].name);
+ok(me.pendingPerks >= 0, '待选强化计数正确');
+
+/* ================= 6. 多人 / 倒地救援 / 友伤 / 快照 ================= */
+console.log('[MULTI]');
+const GM = PP.Sim.create(555, { solo: false });
+const A = PP.Sim.addPlayer(GM, 1, '甲');
+const B = PP.Sim.addPlayer(GM, 2, '乙');
+ok(GM.playerList.length === 2, '两名玩家加入');
+ok(GM.solo === false, '多人模式：不会一倒地就结束');
+
+// 倒地
+GM.damagePlayer(2, 500, 0, 0, 0);
+ok(B.downed === true, '乙被打倒（进入倒地而非直接淘汰）');
+ok(A.downed === false, '甲未受影响');
+ok(GM.state === 'playing', '还有人站着 → 本局继续');
+
+// 救援
+B.x = A.x + 0.9; B.y = A.y;
+PP.Sim.setInput(GM, 1, { revive: true });
+for (let i = 0; i < 80; i++) PP.Sim.tick(GM);
+ok(B.downed === false, '甲按住 F 把乙救起');
+ok(B.hp > 0, '被救起后恢复生命 = ' + Math.round(B.hp));
+
+// 友伤（清场，排除干扰）
+GM.enemies.length = 0; GM.projectiles.length = 0;
+A.hp = 100; A.ap = 0; A.downed = false; A.eliminated = false; A.invuln = 0;
+B.hp = 100; B.ap = 0; B.downed = false; B.eliminated = false; B.invuln = 0;
+B.x = A.x + 2; B.y = A.y; A.a = 0; A.pitch = 0; A.pitchBase = 0; A.kickPitch = 0;
+A.fireCd = 0; A.reloadT = 0; A.mag[A.weapon] = 12;
+GM.friendlyFire = 0.35;
+GM.state = 'playing';
+let hpB = B.hp;
+PP.Sim.fire(GM, A);
+ok(B.hp < hpB, '友伤生效：乙掉血 ' + (hpB - B.hp).toFixed(1));
+ok((hpB - B.hp) < 30, '友伤被打折（' + (hpB - B.hp).toFixed(1) + ' < 30）');
+GM.friendlyFire = 0;
+B.hp = 100; A.fireCd = 0; A.reloadT = 0; A.mag[A.weapon] = 12; B.invuln = 0;
+PP.Sim.fire(GM, A);
+ok(B.hp === 100, '友伤关闭后不掉血');
+GM.friendlyFire = 0.35;
+
+// 快照往返
+const buf = PP.Snap.encode(GM, A);
+const sn = PP.Snap.decode(buf);
+ok(sn.players.length >= 1, '快照包含玩家 = ' + sn.players.length);
+ok(sn.enemies.length <= GM.enemies.length, '快照包含敌人 = ' + sn.enemies.length + '（AOI 裁剪后）');
+let roundtrip = true;
+for (const p of sn.players) { if (!isFinite(p.x) || !isFinite(p.y)) roundtrip = false; }
+ok(roundtrip, '快照坐标解码有效');
+ok(sn.threat === GM.threat, '快照威胁等级一致');
+
+/* ================= 7. 移动端触控 ================= */
+console.log('[TOUCH]');
+ok(PP.Touch.isTouch() === false, '无头环境正确识别为非触屏设备');
+const TC = PP.Touch;
+TC.enabled = true;
+TC.move.x = 0.5; TC.move.y = -1; TC.fire = true; TC.sprint = true;
+const ti = { fwd: 0, strafe: 0, sprint: false, fire: false };
+TC.applyTo(ti);
+ok(ti.fwd === 1 && ti.strafe === 0.5 && ti.fire === true && ti.sprint === true,
+  '虚拟摇杆映射正确（前=' + ti.fwd + ' 右=' + ti.strafe + '）');
+TC.move.x = 0; TC.move.y = 0.1;
+TC.applyTo(ti);
+ok(ti.fwd < 0, '摇杆下推 = 后退（' + ti.fwd.toFixed(2) + '）');
+TC.look.dx = 10; TC.look.dy = -5;
+const lk = TC.consumeLook();
+ok(lk.dx === 10 && lk.dy === -5 && TC.look.dx === 0, '视角增量可被消费并清零');
+TC.firePressed = true;
+ok(TC.consumeFire() === true && TC.consumeFire() === false, '开火只触发一次（半自动不会连点）');
+TC.btnReload = true;
+ok(TC.consumeReload() === true && TC.consumeReload() === false, '装填按钮是一次性触发');
+ok(TC.LOOK_SENS > 0, '触屏视角灵敏度 = ' + TC.LOOK_SENS);
+TC.enabled = false;
+// 移动端降分辨率
+PP.Render.quality = 0.55; PP.Render.resize();
+ok(PP.Render.W * PP.Render.H < 90000, '移动端画质档位下像素数 = ' + (PP.Render.W * PP.Render.H) + '（桌面为 9 万）');
+PP.Render.quality = 1; PP.Render.resize();
+
+/* ================= 8. 设置 & 词条快捷键 ================= */
+console.log('[SETTINGS]');
+const ST = PP.Settings;
+ok(ST.key('fwd') === 'w' && ST.key('sprint') === 'shift', '默认键位加载正常');
+ST.data.keys.fwd = 't';
+ok(ST.key('fwd') === 't', '键位可重新绑定（前进 → T）');
+ST.data.keys.fwd = 'w';
+ok(ST.data.keys.w1 === '1' && ST.data.keys.w2 === '2' && ST.data.keys.w3 === '3', '武器键位存在');
+ST.data.volume = 0.3; PP.Audio.setVolume(0.3);
+ok(Math.abs(PP.Audio.getVolume() - 0.3) < 0.001, '音量可设置（' + PP.Audio.getVolume() + '）');
+PP.Audio.setMuted(true); ok(PP.Audio.isMuted() === true, '静音开关生效');
+PP.Audio.setMuted(false); ok(PP.Audio.isMuted() === false, '取消静音生效');
+ST.data.mouseSens = 1.5; PP.Render.quality = ST.data.quality; PP.Render.resize();
+ok(ST.data.mouseSens === 1.5 && PP.Render.W > 0, '灵敏度与画质可写入');
+
+// 词条快捷键（1/2/3）
+{
+  const list = [{ id: 'vitality', name: '强健', desc: 'x' }, { id: 'power', name: '重击', desc: 'y' }, { id: 'haste', name: '疾行', desc: 'z' }];
+  let picked = null;
+  PP.Hud.showPerks(list, (pid) => { picked = pid; });
+  ok(PP.Hud.perksOpen(), '选卡弹窗已打开');
+  PP.Hud.pickPerk(2);
+  ok(picked === 'haste', '数字键 3 选中第 3 张卡（' + picked + '）');
+  ok(!PP.Hud.perksOpen(), '选完自动关窗');
+  picked = null;
+  PP.Hud.showPerks(list, (pid) => { picked = pid; });
+  PP.Hud.pickPerk(9);
+  ok(picked === null && PP.Hud.perksOpen(), '越界索引不会误选');
+  PP.Hud.hidePerks();
+}
+
+// 鼠标指针：只有真正在游玩时才锁定（否则点标题/暂停/结算页会把鼠标吞掉）
+{
+  const h = listeners['stage'] && listeners['stage'].mousedown;
+  ok(!!h, '画面点击事件已绑定');
+  const G4 = PP.G;
+  const keep = G4.state;
+  lockCount = 0;
+  G4.state = 'paused';
+  h({ button: 0, preventDefault: () => { } });
+  ok(lockCount === 0, '暂停时点击画面不锁定鼠标');
+  G4.state = 'over';
+  h({ button: 0, preventDefault: () => { } });
+  ok(lockCount === 0, '结算页点击画面不锁定鼠标');
+  G4.state = 'playing';
+  h({ button: 0, preventDefault: () => { } });
+  ok(lockCount === 1, '游玩中点击画面才锁定鼠标');
+  G4.state = keep;
+}
+
+/* ================= 9. 渲染 ================= */
+console.log('[RENDER]');
+const OUT = path.join(PROJ, 'screenshots');
+if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
+function shot(name, setup) {
+  G2.enemies.length = 0; G2.projectiles.length = 0; G2.particles.length = 0;
+  G2.viewOffsetY = 0; G2.shake = 0; G2.muzzleT = 0; G2.weaponRaise = 0; G2.weaponBobY = 0; G2.weaponSwayX = 0;
+  setup();
+  PP.Render.frame(G2);
+  const w = captured.width, h2 = captured.height, S = 3;
+  const out = new Uint8ClampedArray(w * S * h2 * S * 4);
+  for (let y = 0; y < h2 * S; y++) {
+    const sy = (y / S) | 0;
+    for (let x = 0; x < w * S; x++) {
+      const sx = (x / S) | 0;
+      const si = (sy * w + sx) * 4, di = (y * w * S + x) * 4;
+      out[di] = captured.data[si]; out[di + 1] = captured.data[si + 1];
+      out[di + 2] = captured.data[si + 2]; out[di + 3] = 255;
+    }
+  }
+  writePNG(path.join(OUT, name), w * S, h2 * S, out);
+  console.log('       -> screenshots/' + name);
+}
+  let rerr = null;
+  try {
+    shot('v2_outdoor.png', () => {
+    G2.player.x = W.spawn.x; G2.player.y = W.spawn.y; G2.player.a = 0.9; G2.player.pitch = 0.0;
+    const a = PP.Ent.spawn(G2, 'zombie', G2.player.x + 4, G2.player.y + 1); a.spawnT = 0;
+    const b = PP.Ent.spawn(G2, 'husk', G2.player.x + 7, G2.player.y - 2); b.spawnT = 0;
+    const c = PP.Ent.spawn(G2, 'skeleton', G2.player.x + 5, G2.player.y + 4); c.spawnT = 0;
+    G2.pickups.push({ kind: 'chest', x: G2.player.x + 3, y: G2.player.y - 3, z: 0.2, t: 0.5, life: Infinity });
+  });
+  shot('v2_forest.png', () => {
+    G2.player.a = 2.2; G2.player.pitch = 0.05; G2.weapon = 1;
+    const a = PP.Ent.spawn(G2, 'zombie', G2.player.x + 3.2, G2.player.y + 1.4); a.spawnT = 0; a.windup = 0.3;
+    G2.muzzleT = 0.06;
+  });
+  shot('v2_indoor.png', () => {
+    let poi = W.pois.find(p => p.type === 'bunker') || W.pois[1];
+    G2.player.x = poi.x; G2.player.y = poi.y; G2.player.a = 0.3; G2.player.pitch = 0;
+    G2.weapon = 2;
+    const a = PP.Ent.spawn(G2, 'skeleton', poi.x + 2.5, poi.y); a.spawnT = 0; a.windup = 0.3;
+    G2.projectiles.push({ x: poi.x + 1.4, y: poi.y, z: 0.62, vx: 1, vy: 0, vz: 0, dmg: 9, life: 2 });
+  });
+} catch (ex) { rerr = ex; }
+ok(rerr === null, '渲染 3 个场景无异常' + (rerr ? ' -> ' + rerr.stack : ''));
+
+// 性能参考：移动端画质档位下的渲染耗时
+PP.Render.quality = 0.55; PP.Render.resize();
+const pt0 = Date.now();
+for (let i = 0; i < 60; i++) PP.Render.frame(G2);
+const pms = (Date.now() - pt0) / 60;
+console.log('        性能参考: 移动端画质(0.55, ' + PP.Render.W + 'x' + PP.Render.H + ') 渲染 ≈ ' +
+  pms.toFixed(2) + ' ms/帧（桌面 V8，手机一般慢 2-4 倍）');
+PP.Render.quality = 1; PP.Render.resize();
+const pt1 = Date.now();
+for (let i = 0; i < 60; i++) PP.Render.frame(G2);
+console.log('                  桌面画质(1.0, ' + PP.Render.W + 'x' + PP.Render.H + ') 渲染 ≈ ' +
+  ((Date.now() - pt1) / 60).toFixed(2) + ' ms/帧');
+
+console.log('\n结果: ' + (fails === 0 ? '全部通过' : fails + ' 项失败'));
+process.exit(fails ? 1 : 0);
