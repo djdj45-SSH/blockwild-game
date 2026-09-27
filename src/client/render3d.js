@@ -10,6 +10,7 @@ import {
   buildPlayer, buildEnemy, buildWeaponView, buildPickup,
   buildBoneProjectile, animateHumanoid, animateSpider, disposeObject
 } from '../three/models.js';
+import { buildArchitecture } from '../three/architecture.js';
 
 (function () {
   const ROOT = (typeof window !== 'undefined') ? window : globalThis;
@@ -18,7 +19,7 @@ import {
 
   const EYE = 0.62;
   const FOV = 72;
-  const NEAR = 0.05;
+  const NEAR = 0.08;
   const FAR = 120;
 
   let renderer, scene, camera, sun, ambient, hemi, fill, rim;
@@ -271,8 +272,11 @@ import {
       geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
       const mat = makeTextured(skin.map || 'grass', 0xffffff, 1, {
         vertexColors: true,
-        side: THREE.DoubleSide,
-        color: 0xffffff
+        side: THREE.FrontSide,
+        color: 0xffffff,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1
       });
       // 乘色调：texture 已有基色，用 color 微调
       mat.color.setHex(0xffffff);
@@ -282,7 +286,7 @@ import {
       worldGroup.add(mesh);
     }
 
-    // ---- 墙：合并 + UV ----
+    // ---- 墙：只生成外露面（消除相邻方块内壁 z-fighting「穿模」） ----
     const wallBuckets = new Map();
     for (let y = 0; y < SIZE; y++) {
       for (let x = 0; x < SIZE; x++) {
@@ -293,51 +297,90 @@ import {
         b.xs.push(x); b.ys.push(y);
       }
     }
+
+    const solidAt = (tx, ty) => {
+      if (tx < 0 || ty < 0 || tx >= SIZE || ty >= SIZE) return true;
+      return wall[ty * SIZE + tx] !== 0;
+    };
+
     for (const [ty, b] of wallBuckets) {
       const n = b.xs.length;
       const h = wallHeight(ty);
-      const pos = new Float32Array(n * 12 * 3 * 3);
-      const nor = new Float32Array(n * 12 * 3 * 3);
-      const uvs = new Float32Array(n * 12 * 3 * 2);
       const skin = WALL_SKIN[ty] || WALL_SKIN[1];
-      let o = 0, uo = 0;
-      for (let i = 0; i < n; i++) {
-        const cx = b.xs[i] + 0.5, cz = b.ys[i] + 0.5;
-        const x0 = cx - 0.5, x1 = cx + 0.5;
-        const y0 = 0, y1 = h;
-        const z0 = cz - 0.5, z1 = cz + 0.5;
-        const faces = [
-          [x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, 0, 1, 0],
-          [x0, y0, z0, x0, y0, z1, x1, y0, z1, x1, y0, z0, 0, -1, 0],
-          [x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1, 0, 0, 1],
-          [x0, y0, z0, x0, y1, z0, x1, y1, z0, x1, y0, z0, 0, 0, -1],
-          [x1, y0, z0, x1, y1, z0, x1, y1, z1, x1, y0, z1, 1, 0, 0],
-          [x0, y0, z0, x0, y0, z1, x0, y1, z1, x0, y1, z0, -1, 0, 0]
-        ];
-        for (const f of faces) {
-          const verts = [f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[0], f[1], f[2], f[6], f[7], f[8], f[9], f[10], f[11]];
-          for (let k = 0; k < 18; k++) pos[o + k] = verts[k];
-          for (let v = 0; v < 6; v++) {
-            nor[o + v * 3] = f[12]; nor[o + v * 3 + 1] = f[13]; nor[o + v * 3 + 2] = f[14];
-          }
-          // UV
-          const uvFace = [0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1];
-          for (let k = 0; k < 12; k++) uvs[uo + k] = uvFace[k];
-          o += 18; uo += 12;
+      // 预估最多 6 面，实际更少
+      const maxFaces = n * 6;
+      const pos = new Float32Array(maxFaces * 6 * 3);
+      const nor = new Float32Array(maxFaces * 6 * 3);
+      const uvs = new Float32Array(maxFaces * 6 * 2);
+      const cols = new Float32Array(maxFaces * 6 * 3);
+      let faceCount = 0;
+
+      const pushFace = (verts, nx, ny, nz, tint) => {
+        const fi = faceCount * 18;
+        for (let k = 0; k < 18; k++) pos[fi + k] = verts[k];
+        for (let v = 0; v < 6; v++) {
+          nor[fi + v * 3] = nx; nor[fi + v * 3 + 1] = ny; nor[fi + v * 3 + 2] = nz;
+          const ui = faceCount * 12;
+          // 两三角 UV
+          const uv = [0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1];
+          for (let k = 0; k < 12; k++) uvs[ui + k] = uv[k];
+          cols[fi + v * 3] = tint; cols[fi + v * 3 + 1] = tint; cols[fi + v * 3 + 2] = tint;
         }
+        faceCount++;
+      };
+
+      for (let i = 0; i < n; i++) {
+        const gx = b.xs[i], gy = b.ys[i];
+        const x0 = gx, x1 = gx + 1;
+        const y0 = 0, y1 = h;
+        const z0 = gy, z1 = gy + 1;
+        // 顶面着色略亮、底面略暗
+        const topT = 1.08, sideT = 1.0, botT = 0.72;
+
+        // 邻接实心 → 该面是内壁，不生成（消除 z-fighting）
+        const nX = solidAt(gx + 1, gy);
+        const pX = solidAt(gx - 1, gy);
+        const nZ = solidAt(gx, gy + 1);
+        const pZ = solidAt(gx, gy - 1);
+        const covered = nX && pX && nZ && pZ;
+
+        // +Y 顶（四周被围时省略）
+        if (!covered) {
+          pushFace([x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z0, x1, y1, z1, x0, y1, z1], 0, 1, 0, topT);
+        }
+        // +X / -X / +Z / -Z
+        if (!nX) pushFace([x1, y0, z0, x1, y1, z0, x1, y1, z1, x1, y0, z0, x1, y1, z1, x1, y0, z1], 1, 0, 0, sideT);
+        if (!pX) pushFace([x0, y0, z0, x0, y0, z1, x0, y1, z1, x0, y0, z0, x0, y1, z1, x0, y1, z0], -1, 0, 0, sideT);
+        if (!nZ) pushFace([x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y0, z1, x1, y1, z1, x0, y1, z1], 0, 0, 1, sideT);
+        if (!pZ) pushFace([x0, y0, z0, x0, y1, z0, x1, y1, z0, x0, y0, z0, x1, y1, z0, x1, y0, z0], 0, 0, -1, sideT);
       }
+
+      const used = faceCount * 18;
       const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-      geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-      geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+      geo.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, used), 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(nor.subarray(0, used), 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(uvs.subarray(0, faceCount * 12), 2));
+      geo.setAttribute('color', new THREE.BufferAttribute(cols.subarray(0, used), 3));
       const mat = makeTextured(skin.map || 'stone', 0xffffff, 1, {
-        side: THREE.DoubleSide,
-        color: 0xffffff
+        side: THREE.FrontSide,
+        color: 0xffffff,
+        vertexColors: true,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
+      mesh.name = 'walls_' + ty;
       worldGroup.add(mesh);
+    }
+
+    try {
+      const arch = buildArchitecture(Wd);
+      worldGroup.add(arch);
+    } catch (err) {
+      if (typeof console !== 'undefined') console.warn('arch', err);
     }
   }
 
@@ -567,7 +610,20 @@ import {
       const swayX = (G.weaponSwayX || 0) * 0.15;
       const bobY = (G.weaponBobY || 0) * 0.002;
       const raise = (G.weaponRaise || 0) * 0.01;
-      weaponRoot.position.set(0.32 + swayX, -0.32 + bobY + raise, -0.52);
+      // 视模防穿墙：沿视线探测到墙则拉近枪
+      let weaponZ = -0.52;
+      if (PP.World && PP.World.rayWall) {
+        const cy = camObj.a || 0;
+        const cp = pitch;
+        const dx = Math.cos(cy) * Math.cos(cp);
+        const dy = Math.sin(cy) * Math.cos(cp);
+        const wallD = PP.World.rayWall(camObj.x, camObj.y, dx, dy, 1.2);
+        if (wallD < 0.75) {
+          const k = Math.max(0.18, (wallD - 0.18) / 0.55);
+          weaponZ = -0.18 - 0.34 * k;
+        }
+      }
+      weaponRoot.position.set(0.32 + swayX, -0.32 + bobY + raise, weaponZ);
       weaponRoot.rotation.set(0.18 + (G.kickPitch || 0) * 0.4, 0.22, 0.04);
       if (G.muzzleT > 0) {
         muzzleLight.intensity = 4 * (G.muzzleT / 0.06);

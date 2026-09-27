@@ -60,7 +60,7 @@ export function buildHumanoid(opts = {}) {
   // 胸腔（略宽于腰）
   const torso = box(0.32 * bulk, torsoH, 0.18 * bulk, shirt, 0, hipY + torsoH * 0.45, 0, root);
   // 肩带
-  box(0.40 * bulk, 0.08 * k, 0.16 * bulk, shirt, 0, shoulderY - 0.02 * k, 0, root);
+  box(0.34 * bulk, 0.08 * k, 0.15 * bulk, shirt, 0, shoulderY - 0.02 * k, 0, root);
 
   // 头（圆角感：盒 + 下巴）
   const headG = group('head');
@@ -76,16 +76,16 @@ export function buildHumanoid(opts = {}) {
 
   // 手臂：上臂锥、前臂、手
   const armL = group('armL');
-  armL.position.set(-0.22 * bulk, shoulderY - 0.02, 0);
+  armL.position.set(-0.19 * bulk, shoulderY - 0.02, 0);
   root.add(armL);
-  cyl(0.055, 0.048, 0.20 * k, limb, 0, -0.10 * k, 0, armL, 7);
+  cyl(0.048, 0.042, 0.20 * k, limb, 0, -0.10 * k, 0, armL, 7);
   cyl(0.042, 0.038, 0.18 * k, skinDark, 0, -0.28 * k, 0, armL, 7);
   box(0.07, 0.08, 0.06, skin, 0, -0.40 * k, 0, armL);
 
   const armR = group('armR');
-  armR.position.set(0.22 * bulk, shoulderY - 0.02, 0);
+  armR.position.set(0.19 * bulk, shoulderY - 0.02, 0);
   root.add(armR);
-  cyl(0.055, 0.048, 0.20 * k, limb, 0, -0.10 * k, 0, armR, 7);
+  cyl(0.048, 0.042, 0.20 * k, limb, 0, -0.10 * k, 0, armR, 7);
   cyl(0.042, 0.038, 0.18 * k, skinDark, 0, -0.28 * k, 0, armR, 7);
   box(0.07, 0.08, 0.06, skin, 0, -0.40 * k, 0, armR);
 
