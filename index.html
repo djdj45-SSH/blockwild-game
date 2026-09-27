@@ -1,16 +1,17 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<title>方块荒野 BLOCKWILD · 第一人称像素射击</title>
+<title>方块荒野 程序生成开放世界 · 写实画风 · 局域网联机</title>
 <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:," />
 </head>
 <body>
 <div id="stage">
-  <canvas id="view" width="400" height="225"></canvas>
+  <canvas id="view" ></canvas>
 
   <div id="vignette"></div>
   <div id="blood"></div>
@@ -144,7 +145,7 @@
     <div class="panel title-panel">
       <div class="title-top">
         <div>
-          <h1>方块<span>荒野</span></h1>
+          <h1>方块荒野<span>BLOCKWILD · SURVIVAL FPS</span></h1>
           <p class="tag">BLOCKWILD · 开放世界 · 第一人称像素射击</p>
         </div>
         <div class="profile-card">
@@ -274,21 +275,6 @@
   </div>
 </div>
 
-<script src="src/core.js"></script>
-<script src="src/art.js"></script>
-<script src="src/audio.js"></script>
-<script src="src/sim/weapons.js"></script>
-<script src="src/sim/roguelike.js"></script>
-<script src="src/sim/world.js"></script>
-<script src="src/sim/entities.js"></script>
-<script src="src/sim/sim.js"></script>
-<script src="src/sim/snapshot.js"></script>
-<script src="src/client/save.js"></script>
-<script src="src/client/render3d.js"></script>
-<script src="src/client/hud.js"></script>
-<script src="src/client/settings.js"></script>
-<script src="src/client/net.js"></script>
-<script src="src/client/touch.js"></script>
-<script src="src/client/game.js"></script>
+<script type="module" src="src/client/main.js"></script>
 </body>
 </html>

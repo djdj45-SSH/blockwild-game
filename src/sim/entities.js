@@ -161,8 +161,11 @@
   function moveEntity(o, dx, dy) {
     const w = W();
     const r = o.radius || 0.28;
-    if (!w.circleBlocked(o.x + dx, o.y, r)) o.x += dx;
-    if (!w.circleBlocked(o.x, o.y + dy, r)) o.y += dy;
+    if (w.moveCircle) w.moveCircle(o, dx, dy, r);
+    else {
+      if (!w.circleBlocked(o.x + dx, o.y, r)) o.x += dx;
+      if (!w.circleBlocked(o.x, o.y + dy, r)) o.y += dy;
+    }
   }
   E.moveEntity = moveEntity;
 

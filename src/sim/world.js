@@ -257,9 +257,76 @@
   };
   World.inWater = function (x, y) { return World.floorAt(x, y) === 5; };
 
+  /**
+   * 圆 vs 网格墙：遍历 AABB 覆盖的全部格子，做圆-轴对齐矩形距离判定。
+   * 比「四角+中心」采样准确，避免贴墙漏检与角点误卡。
+   */
   World.circleBlocked = function (x, y, r) {
-    return World.isWall(x - r, y - r) || World.isWall(x + r, y - r) ||
-           World.isWall(x - r, y + r) || World.isWall(x + r, y + r) || World.isWall(x, y);
+    const minX = Math.floor(x - r), maxX = Math.floor(x + r);
+    const minY = Math.floor(y - r), maxY = Math.floor(y + r);
+    const r2 = r * r;
+    for (let ty = minY; ty <= maxY; ty++) {
+      for (let tx = minX; tx <= maxX; tx++) {
+        if (!World.isWallTile(tx, ty)) continue;
+        // 格子 [tx,tx+1]×[ty,ty+1] 与圆 (x,y,r) 的最近点
+        const cx = x < tx ? tx : (x > tx + 1 ? tx + 1 : x);
+        const cy = y < ty ? ty : (y > ty + 1 ? ty + 1 : y);
+        const dx = x - cx, dy = y - cy;
+        if (dx * dx + dy * dy < r2) return true;
+      }
+    }
+    return false;
+  };
+
+  /** 若圆已陷入墙内，沿轴推出到最近自由位（防卡墙） */
+  World.unstickCircle = function (o, r) {
+    if (!World.circleBlocked(o.x, o.y, r)) return false;
+    const step = 0.08;
+    for (let i = 1; i <= 12; i++) {
+      const cand = [
+        [o.x + step * i, o.y], [o.x - step * i, o.y],
+        [o.x, o.y + step * i], [o.x, o.y - step * i],
+        [o.x + step * i, o.y + step * i], [o.x - step * i, o.y - step * i],
+        [o.x + step * i, o.y - step * i], [o.x - step * i, o.y + step * i]
+      ];
+      for (const [nx, ny] of cand) {
+        if (!World.circleBlocked(nx, ny, r)) {
+          o.x = nx; o.y = ny;
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  /**
+   * 轴分离滑动 + 可选对角补偿，减少撞角卡住。
+   * dist 过大时自动子步进，防穿墙。
+   */
+  World.moveCircle = function (o, dx, dy, r) {
+    const maxStep = Math.max(r * 0.9, 0.12);
+    const dist = Math.hypot(dx, dy);
+    if (dist < 1e-8) return;
+    const steps = Math.max(1, Math.ceil(dist / maxStep));
+    const sx = dx / steps, sy = dy / steps;
+    for (let s = 0; s < steps; s++) {
+      let moved = false;
+      const ox = o.x, oy = o.y;
+      if (!World.circleBlocked(o.x + sx, o.y, r)) { o.x += sx; moved = true; }
+      if (!World.circleBlocked(o.x, o.y + sy, r)) { o.y += sy; moved = true; }
+      // 对角：两轴都受阻时尝试整体斜向（可过斜角缝，但仍被角挡）
+      if (!moved && (sx !== 0 && sy !== 0)) {
+        if (!World.circleBlocked(o.x + sx, o.y + sy, r)) {
+          o.x += sx; o.y += sy; moved = true;
+        }
+      }
+      // 完全卡住则回滚本步
+      if (!moved) {
+        o.x = ox; o.y = oy;
+        break;
+      }
+    }
+    World.unstickCircle(o, r);
   };
 
   World.rayWall = function (px, py, dx, dy, maxD) {

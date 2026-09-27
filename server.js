@@ -47,8 +47,12 @@ const httpServer = http.createServer((req, res) => {
       tick: G ? G.tick : 0, state: G ? G.state : '-', seed: G ? G.seed : 0
     }), MIME['.json']);
   }
-  const filePath = path.join(ROOT, path.normalize(urlPath));
-  if (!filePath.startsWith(ROOT)) return send(res, 403, 'forbidden');
+  // 优先 dist（Vite 构建产物），保证联机托管的是 Three.js 客户端
+  const distRoot = path.join(ROOT, 'dist');
+  const rel = path.normalize(urlPath).replace(/^[\\/]+/, '');
+  let filePath = path.join(distRoot, rel);
+  if (!fs.existsSync(filePath)) filePath = path.join(ROOT, rel);
+  if (!filePath.startsWith(distRoot) && !filePath.startsWith(ROOT)) return send(res, 403, 'forbidden');
   fs.readFile(filePath, (err, data) => {
     if (err) return send(res, 404, '404 ' + urlPath);
     send(res, 200, data, MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream');

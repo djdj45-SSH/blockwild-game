@@ -421,8 +421,11 @@
     const vx = (dirX * fwd - dirY * strafe) * speed;
     const vy = (dirY * fwd + dirX * strafe) * speed;
     const r = p.radius;
-    if (!PP.World.circleBlocked(p.x + vx * dt, p.y, r)) p.x += vx * dt;
-    if (!PP.World.circleBlocked(p.x, p.y + vy * dt, r)) p.y += vy * dt;
+    if (PP.World.moveCircle) PP.World.moveCircle(p, vx * dt, vy * dt, r);
+    else {
+      if (!PP.World.circleBlocked(p.x + vx * dt, p.y, r)) p.x += vx * dt;
+      if (!PP.World.circleBlocked(p.x, p.y + vy * dt, r)) p.y += vy * dt;
+    }
     p.speed = Math.hypot(vx, vy);
     p.bobT += dt * (6 + p.speed * 1.7);
     p.bobAmt += ((p.speed > 0.1 ? 1 : 0) - p.bobAmt) * Math.min(1, dt * 8);
@@ -535,8 +538,11 @@
     const vx = (dirX * fwd - dirY * strafe) * speed;
     const vy = (dirY * fwd + dirX * strafe) * speed;
     const r = p.radius || 0.26;
-    if (!PP.World.circleBlocked(p.x + vx * dt, p.y, r)) p.x += vx * dt;
-    if (!PP.World.circleBlocked(p.x, p.y + vy * dt, r)) p.y += vy * dt;
+    if (PP.World.moveCircle) PP.World.moveCircle(p, vx * dt, vy * dt, r);
+    else {
+      if (!PP.World.circleBlocked(p.x + vx * dt, p.y, r)) p.x += vx * dt;
+      if (!PP.World.circleBlocked(p.x, p.y + vy * dt, r)) p.y += vy * dt;
+    }
     p.speed = Math.hypot(vx, vy);
   };
 
@@ -604,6 +610,35 @@
         if (d < nearest) nearest = d;
       }
       if (nearest > 90) G.enemies.splice(i, 1);
+    }
+
+    // 玩家与敌人身体互斥，防止穿模重叠
+    {
+      const w = PP.World;
+      for (const pl of G.playerList) {
+        if (!pl || pl.eliminated) continue;
+        const pr = pl.radius || 0.26;
+        for (const e of G.enemies) {
+          if (!e || e.state !== 'alive') continue;
+          const er = e.radius || 0.28;
+          const dx = e.x - pl.x, dy = e.y - pl.y;
+          const rr = pr + er;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > rr * rr || d2 < 1e-10) continue;
+          const d = Math.sqrt(d2);
+          const ux = dx / d, uy = dy / d;
+          const overlap = rr - d;
+          const pPush = overlap * 0.28;
+          const ePush = overlap * 0.72;
+          if (w && w.moveCircle) {
+            w.moveCircle(pl, -ux * pPush, -uy * pPush, pr);
+            w.moveCircle(e, ux * ePush, uy * ePush, er);
+          } else {
+            pl.x -= ux * pPush; pl.y -= uy * pPush;
+            e.x += ux * ePush; e.y += uy * ePush;
+          }
+        }
+      }
     }
 
     syncView(G);
