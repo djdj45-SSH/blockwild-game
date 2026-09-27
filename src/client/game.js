@@ -208,7 +208,7 @@
      否则点标题页、暂停页、结算页、设置页的空白处都会把鼠标吞掉。 */
   function isPlaying() {
     if (!G) return false;
-    if (PP.Touch && PP.Touch.enabled) return false;
+    // 键鼠与触屏可并存：不能因为开了触屏就禁用鼠标开火
     if (mode === 'solo') return G.state === 'playing';
     return !!G.paused === false && G.state !== 'over' && PP.Net.connected;
   }
@@ -266,7 +266,6 @@
     const stage = document.getElementById('stage');
     stage.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
-      if (PP.Touch && PP.Touch.enabled) return;     // 触屏由虚拟按键负责
       if (!isPlaying()) return;                     // 非游玩状态：不吞鼠标、不开火
       mouseDown = true;
       if (!document.pointerLockElement) lockPointer(canvas);

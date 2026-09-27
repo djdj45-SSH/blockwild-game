@@ -36,10 +36,22 @@
 
   const held = Object.create(null);   // 按键按下状态
 
+  /* 仅「触控优先」设备进入触屏模式。
+     Windows 桌面 / 触屏本 / 混合设备上 ontouchstart、maxTouchPoints 常为真，
+     若据此开启触屏，会把 WASD/鼠标整套键鼠输入吃掉（摇杆恒 0 + isPlaying 恒 false）。 */
   function isTouch() {
-    if (typeof ROOT.ontouchstart !== 'undefined') return true;
-    if (ROOT.navigator && ROOT.navigator.maxTouchPoints > 0) return true;
-    if (ROOT.matchMedia && ROOT.matchMedia('(pointer: coarse)').matches) return true;
+    const nav = ROOT.navigator;
+    const ua = (nav && nav.userAgent) || '';
+    if (/Android|iPhone|iPad|iPod|Mobile|Silk|Kindle/i.test(ua)) return true;
+    // iPadOS 桌面版 Safari 伪装成 Macintosh
+    if (/Macintosh/.test(ua) && nav && nav.maxTouchPoints > 1) return true;
+    if (ROOT.matchMedia) {
+      try {
+        const coarse = ROOT.matchMedia('(pointer: coarse)').matches;
+        const fine = ROOT.matchMedia('(pointer: fine)').matches;
+        if (coarse && !fine) return true;
+      } catch (e) { }
+    }
     return false;
   }
   T.isTouch = isTouch;
@@ -157,13 +169,16 @@
   T.consumePause = function () { const v = T.btnPause; T.btnPause = false; return v; };
 
   /* 写进统一输入对象 */
+  /* 与键鼠合并而不是覆盖：摇杆有位移才改移动量，按键用 OR，避免清掉 WASD / 鼠标开火 */
   T.applyTo = function (input) {
     if (!T.enabled) return input;
-    input.fwd = -T.move.y;      // 摇杆向上 = 前进
-    input.strafe = T.move.x;
-    input.sprint = T.sprint;
-    input.fire = T.fire;
-    input.revive = T.btnRevive;
+    if (T.move.x || T.move.y) {
+      input.fwd = -T.move.y;      // 摇杆向上 = 前进
+      input.strafe = T.move.x;
+    }
+    if (T.sprint) input.sprint = true;
+    if (T.fire) input.fire = true;
+    if (T.btnRevive) input.revive = true;
     return input;
   };
 

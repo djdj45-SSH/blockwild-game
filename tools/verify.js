@@ -505,6 +505,26 @@ ok(sn.threat === GM.threat, '快照威胁等级一致');
 /* ================= 7. 移动端触控 ================= */
 console.log('[TOUCH]');
 ok(PP.Touch.isTouch() === false, '无头环境正确识别为非触屏设备');
+// 桌面/混合设备：有触摸点也不能整机进触屏模式（否则 WASD/鼠标被吃掉）
+{
+  const g = globalThis;
+  const savedOntouch = g.ontouchstart;
+  const savedNav = g.navigator;
+  Object.defineProperty(g, 'ontouchstart', { value: null, configurable: true, writable: true });
+  Object.defineProperty(g, 'navigator', {
+    value: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120', maxTouchPoints: 10 },
+    configurable: true
+  });
+  ok(PP.Touch.isTouch() === false, 'Windows 桌面（maxTouchPoints>0）不进触屏模式');
+  Object.defineProperty(g, 'navigator', {
+    value: { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)', maxTouchPoints: 5 },
+    configurable: true
+  });
+  ok(PP.Touch.isTouch() === true, 'iPhone UA 识别为触屏');
+  Object.defineProperty(g, 'navigator', { value: savedNav, configurable: true });
+  if (savedOntouch === undefined) delete g.ontouchstart;
+  else g.ontouchstart = savedOntouch;
+}
 const TC = PP.Touch;
 TC.enabled = true;
 TC.move.x = 0.5; TC.move.y = -1; TC.fire = true; TC.sprint = true;
@@ -512,7 +532,15 @@ const ti = { fwd: 0, strafe: 0, sprint: false, fire: false };
 TC.applyTo(ti);
 ok(ti.fwd === 1 && ti.strafe === 0.5 && ti.fire === true && ti.sprint === true,
   '虚拟摇杆映射正确（前=' + ti.fwd + ' 右=' + ti.strafe + '）');
+// 摇杆回中不得清掉键鼠输入
+TC.move.x = 0; TC.move.y = 0;
+ti.fwd = 1; ti.strafe = -1; ti.fire = true; ti.sprint = true; ti.revive = true;
+TC.sprint = false; TC.fire = false; TC.btnRevive = false;
+TC.applyTo(ti);
+ok(ti.fwd === 1 && ti.strafe === -1 && ti.fire === true && ti.sprint === true && ti.revive === true,
+  '摇杆空闲时保留 WASD / 鼠标开火 / 键盘疾跑');
 TC.move.x = 0; TC.move.y = 0.1;
+ti.fwd = 1; ti.strafe = 1;
 TC.applyTo(ti);
 ok(ti.fwd < 0, '摇杆下推 = 后退（' + ti.fwd.toFixed(2) + '）');
 TC.look.dx = 10; TC.look.dy = -5;
