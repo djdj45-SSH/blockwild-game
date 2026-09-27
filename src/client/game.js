@@ -60,9 +60,9 @@
     bus.on('reload', (e) => { if (e.id === myId || !e.id) A.reload(e.dur); });
     bus.on('dryfire', (e) => { if (e.id === myId || !e.id) A.dryFire(); });
     bus.on('spawn', () => A.spawn());
-    bus.on('enemyWindup', () => A.enemyGrowl());
+    bus.on('enemyWindup', (e) => { if (e && e.creeper) A.creeperHiss(); else A.enemyGrowl(); });
     bus.on('enemyShoot', () => A.bow());
-    bus.on('explode', () => A.shotShotgun());
+    bus.on('explode', () => A.creeperBoom());
     bus.on('threat', (e) => {
       A.waveStart();
       H.banner('威胁等级 ' + e.level + '\n怪物变得更强了');
@@ -110,15 +110,33 @@
   function endRun() {
     if (document.pointerLockElement) document.exitPointerLock();
     PP.Hud.gameOver(G);
+    // 局外收益：写入星币 / 统计
+    if (PP.Save && G) {
+      const p = G.player || G.me || {};
+      const info = PP.Save.recordRun({
+        score: (p.score != null ? p.score : G.score) || 0,
+        kills: p.kills || G.kills || 0,
+        time: G.elapsed || 0,
+        level: p.level || 1,
+        cleared: false
+      });
+      PP.Hud.showReward(info);
+      PP.Hud.refreshProfile();
+    }
   }
 
   /* ---------------- 启动 ---------------- */
   function startSolo() {
     PP.Audio.init(); PP.Audio.resume();
     mode = 'solo';
+    if (PP.Save) {
+      const nameInput = document.getElementById('inp-name');
+      if (nameInput && nameInput.value) PP.Save.setName(nameInput.value);
+    }
     G = PP.Sim.create(undefined, { solo: true });
-    const me = PP.Sim.addPlayer(G, 1, myName);
+    const me = PP.Sim.addPlayer(G, 1, myName || (PP.Save && PP.Save.name()) || '幸存者');
     me.colorIdx = 0;
+    if (PP.Save) PP.Save.applyToPlayer(me);
     G.me = me; myId = me.id;
     PP.G = G;
     wire(G.bus);
@@ -157,6 +175,8 @@
     PP.Hud.show(PP.Hud._sTitle, false);
     PP.Hud.show(PP.Hud._sOver, false);
     PP.Hud.show(PP.Hud._sPause, false);
+    const shop = document.getElementById('s-shop');
+    if (shop) shop.classList.add('hide');
     PP.Hud.show(PP.Hud._hud, true);
     PP.Hud.reset();
     PP.Hud.banner('方块荒野\n找到补给箱，活下去');
@@ -166,6 +186,21 @@
       try { if (ROOT.screen && ROOT.screen.orientation && ROOT.screen.orientation.lock) ROOT.screen.orientation.lock('landscape'); } catch (e) { }
     }
     lockPointer(canvas);
+  }
+
+  function showTitle() {
+    PP.Hud.show(PP.Hud._sTitle, true);
+    PP.Hud.show(PP.Hud._sOver, false);
+    PP.Hud.show(PP.Hud._sPause, false);
+    PP.Hud.show(PP.Hud._hud, false);
+    const shop = document.getElementById('s-shop');
+    if (shop) shop.classList.add('hide');
+    if (document.pointerLockElement) document.exitPointerLock();
+    if (PP.Save) {
+      const nameInput = document.getElementById('inp-name');
+      if (nameInput && !nameInput.value) nameInput.value = PP.Save.name() || '';
+      PP.Hud.refreshProfile();
+    }
   }
 
   let lockGrace = 0;   // 指针锁定后的忽略帧数（防止锁定瞬间的大位移甩视角）
@@ -219,6 +254,8 @@
         if (key === k('w1')) pending.switchTo = 0;
         if (key === k('w2') && me.unlocked[1]) pending.switchTo = 1;
         if (key === k('w3') && me.unlocked[2]) pending.switchTo = 2;
+        if (key === k('w4') && me.unlocked[3]) pending.switchTo = 3;
+        if (key === k('w5') && me.unlocked[4]) pending.switchTo = 4;
       }
       if (key === k('mute')) { const m = PP.Audio.toggleMute(); PP.Hud.toast(m ? '静音' : '音效开'); }
       if (key === k('pause')) setPause(true);
@@ -256,7 +293,7 @@
       if (!G || !me) return;
       const dir = e.deltaY > 0 ? 1 : -1;
       for (let i = 1; i <= 3; i++) {
-        const n = (me.weapon + dir * i + 12) % 3;
+        const n = (me.weapon + dir * i + 24) % (PP.WEAPONS.length || 5);
         if (me.unlocked[n]) { pending.switchTo = n; break; }
       }
     }, { passive: true });
@@ -473,10 +510,12 @@
     };
     document.getElementById('btn-solo').addEventListener('click', () => {
       myName = val(nameInput, '玩家');
+      if (PP.Save) PP.Save.setName(myName);
       startSolo();
     });
     document.getElementById('btn-online').addEventListener('click', () => {
       myName = val(nameInput, '玩家');
+      if (PP.Save) PP.Save.setName(myName);
       startOnline(val(addrInput, host));
     });
     document.getElementById('btn-resume').addEventListener('click', () => setPause(false));
@@ -486,6 +525,78 @@
     document.getElementById('btn-restart-p').addEventListener('click', () => {
       if (mode === 'solo') startSolo(); else PP.Net.send({ t: 'restart' });
     });
+
+    // 局外：商店 / 结算跳转 / 回主页
+    const btnShop = document.getElementById('btn-shop');
+    if (btnShop) btnShop.addEventListener('click', () => { PP.Hud.openShop(); });
+    const btnShopClose = document.getElementById('btn-shop-close');
+    if (btnShopClose) btnShopClose.addEventListener('click', () => { PP.Hud.closeShop(); });
+    const btnToShop = document.getElementById('btn-to-shop');
+    if (btnToShop) btnToShop.addEventListener('click', () => {
+      PP.Hud.show(PP.Hud._sOver, false);
+      PP.Hud.openShop();
+    });
+    const btnToTitle = document.getElementById('btn-to-title');
+    if (btnToTitle) btnToTitle.addEventListener('click', () => { showTitle(); });
+
+    // 存档：导出 / 导入 / 清空
+    const btnExport = document.getElementById('btn-export');
+    if (btnExport) btnExport.addEventListener('click', () => {
+      const code = PP.Save && PP.Save.exportCode();
+      if (!code) { PP.Hud.toast('导出失败'); return; }
+      const ta = document.getElementById('import-text');
+      if (ta) { ta.value = code; ta.select(); }
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(code);
+      } catch (e) { }
+      const imp = document.getElementById('s-import');
+      if (imp) imp.classList.remove('hide');
+      PP.Hud.toast('存档码已生成，请复制保存');
+    });
+    const btnImport = document.getElementById('btn-import');
+    if (btnImport) btnImport.addEventListener('click', () => {
+      const imp = document.getElementById('s-import');
+      if (imp) imp.classList.remove('hide');
+    });
+    const btnImportOk = document.getElementById('btn-import-ok');
+    if (btnImportOk) btnImportOk.addEventListener('click', () => {
+      const ta = document.getElementById('import-text');
+      const r = PP.Save && PP.Save.importCode(ta ? ta.value : '');
+      if (r && r.ok) {
+        PP.Hud.toast('导入成功：' + (r.name || '幸存者') + ' · 星币 ' + r.coins);
+        if (nameInput) nameInput.value = r.name || nameInput.value;
+        PP.Hud.refreshProfile();
+        const imp = document.getElementById('s-import');
+        if (imp) imp.classList.add('hide');
+      } else {
+        PP.Hud.toast((r && r.reason) || '导入失败');
+      }
+    });
+    const btnImportCancel = document.getElementById('btn-import-cancel');
+    if (btnImportCancel) btnImportCancel.addEventListener('click', () => {
+      const imp = document.getElementById('s-import');
+      if (imp) imp.classList.add('hide');
+    });
+    const btnReset = document.getElementById('btn-reset-save');
+    if (btnReset) btnReset.addEventListener('click', () => {
+      if (!confirm('确定清空本机进度？（星币与增益都会丢失）')) return;
+      if (PP.Save) PP.Save.reset();
+      if (nameInput) nameInput.value = '';
+      PP.Hud.refreshProfile();
+      PP.Hud.toast('进度已清空');
+    });
+
+    // 昵称变化时写入存档
+    if (nameInput) {
+      nameInput.addEventListener('change', () => {
+        if (PP.Save) { PP.Save.setName(nameInput.value); PP.Hud.refreshProfile(); }
+      });
+    }
+
+    if (PP.Save) {
+      if (nameInput && !nameInput.value) nameInput.value = PP.Save.name() || '';
+      PP.Hud.refreshProfile();
+    }
 
     bindInput();
 

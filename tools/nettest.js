@@ -155,6 +155,19 @@ const PP = global.PP;
 
   const kinds = new Set(A.events.map(e => e.t));
   ok(kinds.has('shot') || kinds.has('spawn') || kinds.has('threat'), '收到游戏事件: ' + Array.from(kinds).slice(0, 6).join(','));
+
+  // 心跳：服务端应回包
+  const hbBefore = A.events.filter(e => e.t === 'hb').length;
+  ca.send({ t: 'hb' });
+  await new Promise(r => setTimeout(r, 300));
+  const hbAfter = A.events.filter(e => e.t === 'hb').length;
+  ok(hbAfter > hbBefore, '心跳往返成功（收到 hb 回包）');
+
+  // 异常输入 / 超大消息不应打挂服务端
+  ca.send({ t: 'input', i: { fwd: 999, strafe: -999, turn: 1e9, pitch: -1e9, switchTo: 999, fire: true } });
+  ca.send({ t: 'perk', p: { evil: 1 } });
+  await new Promise(r => setTimeout(r, 250));
+  ok(A.snaps >= 0, '异常输入 / 非法 perk 不会打挂服务端');
   ok(A.events.some(e => e.t === 'players'), '收到队友列表更新');
 
   // 断线处理

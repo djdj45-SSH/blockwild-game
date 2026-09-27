@@ -88,6 +88,25 @@
     tone('sawtooth', 700, 140, 0.13, 0.16);
     noise(0.10, 0.28, 2600, 700, 3, 0, 'bandpass');
   };
+  A.shotSniper = function () {
+    noise(0.18, 0.70, 5200, 400, 0.8, 0);
+    tone('square', 220, 48, 0.22, 0.40);
+    tone('triangle', 1200, 160, 0.10, 0.18);
+  };
+  A.shotMagma = function () {
+    noise(0.07, 0.32, 900, 280, 0.6, 0);
+    tone('sawtooth', 140, 70, 0.08, 0.14);
+    noise(0.05, 0.18, 2200, 900, 2, 0.02, 'bandpass');
+  };
+  A.creeperHiss = function () {
+    noise(0.85, 0.28, 1800, 420, 1.2, 0, 'bandpass');
+    tone('sine', 90, 55, 0.85, 0.10);
+  };
+  A.creeperBoom = function () {
+    noise(0.45, 0.85, 2400, 80, 0.6, 0);
+    tone('sawtooth', 140, 28, 0.40, 0.45);
+    tone('square', 80, 24, 0.35, 0.28, 0.02);
+  };
   A.bow = function () {
     noise(0.07, 0.18, 1800, 600, 3, 0, 'bandpass');
     tone('triangle', 520, 260, 0.10, 0.10);

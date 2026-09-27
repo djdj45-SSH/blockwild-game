@@ -94,12 +94,12 @@ body.locked{cursor:none}
 @keyframes pulse{from{transform:scale(1)}to{transform:scale(1.08)}}
 
 .hud-bl{position:absolute;left:18px;bottom:16px}
-.wpn{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);padding:2px 0}
+.wpn{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);padding:1px 0}
 .wpn b{
   display:inline-block;width:16px;height:16px;line-height:14px;text-align:center;
   border:2px solid var(--frame);font-size:10px;color:var(--dim);
 }
-.wpn span{width:66px;color:var(--dim)}
+.wpn span{width:72px;color:var(--dim)}
 .wpn i{font-style:normal;color:var(--dim);min-width:34px}
 .wpn.locked{opacity:.35}
 .wpn.active{color:#fff}
@@ -232,6 +232,52 @@ body.touch #crosshair{width:32px;height:32px}
   text-align:center;
 }
 .panel.small{width:min(420px,92vw)}
+.panel.title-panel{width:min(720px,94vw)}
+.title-top{display:flex;gap:18px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}
+.profile-card{
+  min-width:200px;padding:12px 14px;background:#2c1e10;border:2px solid var(--frame);
+  border-radius:8px;font-size:12px;color:var(--dim)
+}
+.profile-name{display:flex;flex-direction:column;gap:2px;margin-bottom:8px}
+.profile-name b{color:var(--yellow);font-size:16px}
+.profile-name em{font-style:normal;font-size:10px;opacity:.65;letter-spacing:.5px}
+.profile-coins{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.profile-coins b{color:var(--yellow);font-size:20px}
+.profile-stats{display:flex;flex-wrap:wrap;gap:8px}
+.profile-stats b{color:var(--ink)}
+.shop-panel{width:min(760px,94vw)}
+.shop-coins{font-size:14px;color:var(--dim);margin:8px 0 14px}
+.shop-coins b{color:var(--yellow);font-size:22px;margin-left:6px}
+.shop-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;max-height:52vh;overflow:auto}
+.shop-item{
+  padding:12px;background:#2c1e10;border:2px solid var(--frame);border-radius:8px;
+  display:flex;flex-direction:column;gap:6px
+}
+.shop-item h4{color:var(--yellow);font-size:14px;margin:0}
+.shop-item p{margin:0;font-size:12px;color:#e8dcc0;line-height:1.5}
+.shop-item .lv{font-size:11px;color:var(--dim)}
+.shop-item button{align-self:flex-start;margin-top:4px}
+.shop-item.maxed{opacity:.55}
+.save-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0 6px}
+.tinybtn{
+  padding:4px 10px;font-size:11px;background:#241708;border:1px solid var(--frame);
+  color:var(--ink);cursor:pointer;border-radius:4px
+}
+.tinybtn:hover{border-color:var(--yellow);color:var(--yellow)}
+.tinybtn.danger{color:#e07060}
+.tinybtn.danger:hover{border-color:#e07060}
+.reward-box{
+  display:flex;align-items:baseline;justify-content:center;gap:10px;
+  margin:8px 0 14px;padding:12px;background:#2c1e10;border:2px solid var(--frame);border-radius:8px
+}
+.reward-box span{color:var(--dim);font-size:12px}
+.reward-box b{color:var(--yellow);font-size:28px}
+.reward-box em{font-style:normal;color:var(--dim);font-size:12px}
+.reward-box i{font-style:normal;color:var(--yellow)}
+#s-import textarea{
+  width:100%;box-sizing:border-box;margin:10px 0;padding:10px;background:#1a1208;
+  border:2px solid var(--frame);color:var(--ink);font-size:12px;border-radius:6px;resize:vertical
+}
 .panel h1{
   font-size:44px;letter-spacing:6px;line-height:1;margin-bottom:4px;
   color:#fff;text-shadow:3px 3px 0 #3f8a2a, 6px 6px 0 rgba(20,12,4,.6);
@@ -266,6 +312,15 @@ kbd{
 .stats div{display:flex;justify-content:space-between;padding:5px 4px;border-bottom:1px dashed #6b4c28}
 .stats span{color:var(--dim)}
 .stats b{color:var(--yellow)}
+.operk{margin:0 0 16px;text-align:left}
+.operk .olabel{font-size:11px;color:var(--dim);letter-spacing:2px;margin-bottom:8px}
+#o-perks{display:flex;flex-wrap:wrap;gap:6px;min-height:28px}
+#o-perks .ochip{
+  display:inline-block;padding:3px 10px;font-size:12px;color:#2b1d10;
+  background:var(--yellow);border-radius:10px
+}
+#o-perks .ochip.x{background:#ffb03a}
+#o-perks .empty{color:var(--dim);font-size:12px}
 
 /* ---------- 经验 / 队友 / 武器 / 联机 ---------- */
 .fill.xp{background:linear-gradient(90deg,#ffd447,#9ee06a)}
@@ -307,6 +362,12 @@ kbd{
 .perkcard:hover{transform:translateY(-4px);border-color:var(--yellow);background:#3a2814}
 .perkcard h4{font-size:15px;color:var(--yellow);margin-bottom:8px}
 .perkcard p{font-size:12px;color:#e8dcc0;line-height:1.6}
+.perkcard.stacked{border-color:#8a7040}
+.perkcard.stacked h4{color:#ffb03a}
+.perkcard.stacked::after{
+  content:'可叠加';position:absolute;right:8px;top:8px;font-size:10px;
+  color:#8a7040;letter-spacing:1px
+}
 
 .lobby{margin:14px 0 10px}
 .lobby input{

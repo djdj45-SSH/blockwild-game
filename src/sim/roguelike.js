@@ -34,7 +34,11 @@
     { id: 'boom', name: '爆裂', fmt: '击杀时爆炸，造成 {v} 范围伤害', stat: 'boom', kind: 'add', min: 18, max: 45, tier: 3 },
     { id: 'chain', name: '红石传导', fmt: '命中弹射 {v} 个附近敌人', stat: 'chain', kind: 'add', min: 1, max: 2, tier: 3 },
     { id: 'burn', name: '灼烧', fmt: '命中附加 {v} 秒持续伤害', stat: 'burn', kind: 'add', min: 2, max: 4, tier: 2 },
-    { id: 'kick', name: '重弹', fmt: '击退 +{v}%', stat: 'knockback', kind: 'pct', min: 40, max: 120, tier: 1 }
+    { id: 'kick', name: '重弹', fmt: '击退 +{v}%', stat: 'knockback', kind: 'pct', min: 40, max: 120, tier: 1 },
+    { id: 'multishot', name: '分裂', fmt: '每次射击额外 {v} 发弹丸', stat: 'multishot', kind: 'add', min: 1, max: 2, tier: 3 },
+    { id: 'crit', name: '致命', fmt: '{v}% 概率造成双倍伤害', stat: 'crit', kind: 'add', min: 12, max: 28, tier: 2 },
+    { id: 'slow', name: '寒冰', fmt: '命中减速敌人 {v} 秒', stat: 'slow', kind: 'add', min: 1.2, max: 2.4, tier: 1 },
+    { id: 'ammosave', name: '节俭', fmt: '{v}% 概率不消耗弹药', stat: 'ammosave', kind: 'add', min: 15, max: 35, tier: 2 }
   ];
 
   /* ---------------- 掉落 ---------------- */
@@ -52,22 +56,25 @@
     return 0;
   };
 
-  // 生成一把带词条的武器实例
+  // 生成一把带词条的武器实例（同名词条可叠加，数值在 stats 里求和）
   Rogue.rollWeapon = function (rng, defIndex, threat) {
     const ri = Rogue.rollRarity(rng, threat || 0);
     const R = Rogue.RARITY[ri];
-    const pool = Rogue.AFFIXES.slice();
     const picked = [];
     let n = 0;
     if (ri === 0 && rng.chance(0.45)) n = 1;          // 普通也有小概率 1 条
     else n = R.affixes;
-    for (let i = 0; i < n && pool.length; i++) {
-      const k = (rng.next() * pool.length) | 0;
-      const a = pool.splice(k, 1)[0];
+    const used = {};
+    for (let i = 0; i < n; i++) {
+      let a;
+      // 七成优先新词条，三成允许重复 → 词条池永不枯竭，且可叠加
+      const fresh = [];
+      for (const x of Rogue.AFFIXES) if (!used[x.id]) fresh.push(x);
+      if (fresh.length && rng.chance(0.7)) a = fresh[(rng.next() * fresh.length) | 0];
+      else a = Rogue.AFFIXES[(rng.next() * Rogue.AFFIXES.length) | 0];
+      used[a.id] = (used[a.id] || 0) + 1;
       const t = rng.next();
-      const val = a.kind === 'add'
-        ? (a.min + t * (a.max - a.min))
-        : (a.min + t * (a.max - a.min));
+      const val = a.min + t * (a.max - a.min);
       picked.push({ id: a.id, v: a.kind === 'add' ? Math.round(val * 10) / 10 : Math.round(val) });
     }
     return { def: defIndex, rarity: ri, affixes: picked, name: '' };
@@ -78,6 +85,20 @@
       if (a.id === af.id) return a.fmt.replace('{v}', af.v);
     }
     return af.id;
+  };
+  // 同名词条合并显示（叠加后的总值）
+  Rogue.affixLines = function (affixes) {
+    const sum = {}, order = [];
+    for (const af of affixes || []) {
+      if (!(af.id in sum)) { sum[af.id] = 0; order.push(af.id); }
+      sum[af.id] += af.v;
+    }
+    return order.map(id => {
+      const a = Rogue.AFFIXES.find(x => x.id === id);
+      const v = Math.round(sum[id] * 10) / 10;
+      if (!a) return id + ' +' + v;
+      return a.fmt.replace('{v}', v);
+    });
   };
   Rogue.affixName = function (af) {
     for (const a of Rogue.AFFIXES) if (a.id === af.id) return a.name;
@@ -108,7 +129,8 @@
       kick: base.kick,
       sfx: base.sfx,
       moveSpeed: 1,
-      pierce: 0, leech: 0, scav: 0, boom: 0, chain: 0, burn: 0, knockback: 1
+      pierce: 0, leech: 0, scav: 0, boom: 0, chain: 0, burn: 0, knockback: 1,
+      multishot: 0, crit: 0, slow: 0, ammosave: 0, burnBase: base.burnBase || 0
     };
     const add = {};
     for (const af of inst.affixes) add[af.id] = (add[af.id] || 0) + af.v;
@@ -126,6 +148,10 @@
     if (add.burn) s.burn += add.burn;
     if (add.kick) s.knockback *= (1 + add.kick / 100);
     if (add.speed) s.moveSpeed += add.speed / 100;
+    if (add.multishot) s.multishot += add.multishot;
+    if (add.crit) s.crit += add.crit;
+    if (add.slow) s.slow = Math.max(s.slow, add.slow);
+    if (add.ammosave) s.ammosave += add.ammosave;
 
     // 角色 Perk（乘算/加算在词条之后）
     if (mods) {
@@ -156,16 +182,27 @@
     { id: 'ammo', name: '军需', desc: '弹药上限 +50%，立即补满备弹', apply: (m, p) => { m.ammoMax = (m.ammoMax || 0) + 0.5; } },
     { id: 'thorns', name: '荆棘', desc: '受击时对周围敌人造成 20 反伤', apply: (m) => { m.thorns = (m.thorns || 0) + 20; } },
     { id: 'luck', name: '幸运儿', desc: '补给箱更容易开出高稀有度', apply: (m) => { m.luck = (m.luck || 0) + 1; } },
-    { id: 'sprinter', name: '短跑选手', desc: '疾跑速度 +25%', apply: (m) => { m.sprint = (m.sprint || 0) + 0.25; } }
+    { id: 'sprinter', name: '短跑选手', desc: '疾跑速度 +25%', apply: (m) => { m.sprint = (m.sprint || 0) + 0.25; } },
+    { id: 'regen', name: '自愈', desc: '每秒回复 0.8 生命', apply: (m) => { m.regen = (m.regen || 0) + 0.8; } },
+    { id: 'overheat', name: '背水一战', desc: '生命低于 40% 时伤害 +35%（可叠加）', apply: (m) => { m.overheat = (m.overheat || 0) + 1; } }
   ];
 
-  // 抽 3 个不重复的 Perk（已选过的排除）
+  // 抽 n 个 Perk：池永不枯竭，已选过的仍可出现（可叠加）；本次卡片互不重复
+  // 权重：未选过 ×3，已选过 ×1，保证有新鲜感但不会抽干
   Rogue.rollPerks = function (rng, taken, n) {
-    const pool = Rogue.PERKS.filter(p => taken.indexOf(p.id) < 0);
+    const pool = Rogue.PERKS.slice();
+    const takenSet = new Set(taken || []);
     const out = [];
     const cnt = Math.min(n || 3, pool.length);
     for (let i = 0; i < cnt; i++) {
-      const k = (rng.next() * pool.length) | 0;
+      let total = 0;
+      const wts = pool.map(p => {
+        const w = takenSet.has(p.id) ? 1 : 3;
+        total += w; return w;
+      });
+      let r = rng.next() * total;
+      let k = 0;
+      for (; k < pool.length - 1; k++) { r -= wts[k]; if (r <= 0) break; }
       out.push(pool.splice(k, 1)[0]);
     }
     return out;

@@ -16,7 +16,8 @@
       apBar: g('ap-bar'), apNum: g('ap-num'),
       xpBar: g('xp-bar'), level: g('level'),
       score: g('score'), threat: g('threat'), kills: g('kills'), combo: g('combo'),
-      wp: [g('wp0'), g('wp1'), g('wp2')], wres: [g('w0'), g('w1'), g('w2')],
+      wp: [g('wp0'), g('wp1'), g('wp2'), g('wp3'), g('wp4')],
+      wres: [g('w0'), g('w1'), g('w2'), g('w3'), g('w4')],
       ammo: g('ammo'), reserve: g('reserve'), reload: g('reload'),
       wname: g('wname'), waffix: g('waffix'),
       mates: g('mates'), net: g('net'),
@@ -26,7 +27,9 @@
       perk: g('perk'), perkCards: g('perk-cards'),
       sTitle: g('s-title'), sPause: g('s-pause'), sOver: g('s-over'),
       oScore: g('o-score'), oThreat: g('o-threat'), oKills: g('o-kills'),
-      oHead: g('o-head'), oAcc: g('o-acc'), oCombo: g('o-combo'), oTime: g('o-time')
+      oHead: g('o-head'), oAcc: g('o-acc'), oCombo: g('o-combo'), oTime: g('o-time'),
+      oPerks: g('o-perks'),
+      oGain: g('o-gain'), oCoins: g('o-coins'), oTitle: g('o-title')
     };
   };
 
@@ -65,7 +68,9 @@
 
     if (last.weapon !== p.weapon) {
       last.weapon = p.weapon;
-      for (let i = 0; i < 3; i++) {
+      const nW = D.wp.length;
+      for (let i = 0; i < nW; i++) {
+        if (!D.wp[i]) continue;
         D.wp[i].classList.toggle('active', i === p.weapon);
         D.wp[i].classList.toggle('locked', !p.unlocked[i]);
       }
@@ -76,7 +81,8 @@
     }
     const res = p.reserve[p.weapon] === Infinity ? '∞' : String(p.reserve[p.weapon]);
     if (last.res !== res) { last.res = res; D.reserve.textContent = res; }
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < D.wres.length; i++) {
+      if (!D.wres[i]) continue;
       const txt = !p.unlocked[i] ? '--' : (p.reserve[i] === Infinity ? '∞' : String(p.reserve[i]));
       if (D.wres[i].textContent !== txt) D.wres[i].textContent = txt;
     }
@@ -87,15 +93,16 @@
     const inst = (p.insts && p.insts[p.weapon]) || null;
     if (inst) {
       const nm = PP.Rogue.weaponName(inst);
-      if (last.wname !== nm + p.weapon) {
-        last.wname = nm + p.weapon;
+      const affixKey = inst.affixes.map(a => a.id + ':' + a.v).join(',');
+      if (last.wname !== nm + p.weapon + affixKey) {
+        last.wname = nm + p.weapon + affixKey;
         D.wname.textContent = nm;
         D.wname.style.color = PP.Rogue.RARITY[inst.rarity].color;
         D.waffix.innerHTML = '';
-        for (const af of inst.affixes) {
+        for (const line of PP.Rogue.affixLines(inst.affixes)) {
           const d = document.createElement('div');
           d.className = 'affix';
-          d.textContent = '· ' + PP.Rogue.affixText(af);
+          d.textContent = '· ' + line;
           D.waffix.appendChild(d);
         }
       }
@@ -107,13 +114,19 @@
     if (extra && extra.eliminated) {
       Hud.show(D.revive, true);
       D.reviveBar.style.width = '0%';
-      D.reviveText.textContent = '你已阵亡 · 观战中（队友仍在战斗）';
+      D.reviveText.textContent = G.spectateName
+        ? ('观战中 · ' + G.spectateName + '（队友仍在战斗）')
+        : '你已阵亡 · 观战中（队友仍在战斗）';
     } else if (extra && extra.revive) {
       Hud.show(D.revive, true);
       D.reviveBar.style.width = Math.min(100, (extra.revive.prog || 0) * 100).toFixed(0) + '%';
       D.reviveText.textContent = extra.revive.self
-        ? '你已倒地 · 等待队友救援'
+        ? (G.spectateName ? ('你已倒地 · 观战 ' + G.spectateName) : '你已倒地 · 等待队友救援')
         : '按住 F 救援 ' + (extra.revive.name || '队友');
+    } else if (G.spectateName && (G.player.downed || G.player.eliminated)) {
+      Hud.show(D.revive, true);
+      D.reviveBar.style.width = '0%';
+      D.reviveText.textContent = '观战中 · ' + G.spectateName;
     } else Hud.show(D.revive, false);
   };
 
@@ -157,7 +170,10 @@
       d.className = 'perkcard';
       const num = document.createElement('em');
       num.className = 'pnum'; num.textContent = String(i + 1);
-      const h = document.createElement('h4'); h.textContent = k.name;
+      const h = document.createElement('h4');
+      const stacks = k.stacks || 0;
+      h.textContent = k.name + (stacks > 0 ? ' ×' + (stacks + 1) : '');
+      if (stacks > 0) d.classList.add('stacked');
       const p = document.createElement('p'); p.textContent = k.desc;
       d.appendChild(num); d.appendChild(h); d.appendChild(p);
       d.addEventListener('click', () => Hud.pickPerk(i));
@@ -222,16 +238,111 @@
   Hud.gameOver = function (G) {
     if (!D) return;
     const p = G.player || {};
-    D.oScore.textContent = G.score || 0;
+    D.oScore.textContent = G.score || p.score || 0;
     D.oThreat.textContent = G.threat || 1;
     D.oKills.textContent = p.kills || G.kills || 0;
     D.oHead.textContent = p.headshots || G.headshots || 0;
-    D.oAcc.textContent = (G.shotsFired ? Math.round(G.shotsHit / G.shotsFired * 100) : 0) + '%';
+    D.oAcc.textContent = (p.shotsFired || G.shotsFired ? Math.round((p.shotsHit || G.shotsHit || 0) / (p.shotsFired || G.shotsFired) * 100) : 0) + '%';
     D.oCombo.textContent = p.bestCombo || 0;
     const t = G.elapsed || 0;
     const m = Math.floor(t / 60), s = Math.floor(t % 60);
     D.oTime.textContent = m + ':' + (s < 10 ? '0' : '') + s;
+
+    // 本局强化（含叠加层数）
+    if (D.oPerks) {
+      D.oPerks.innerHTML = '';
+      const stacks = p.perkStacks || {};
+      const ids = Object.keys(stacks);
+      if (!ids.length) {
+        const e = document.createElement('span');
+        e.className = 'empty';
+        e.textContent = '未获得强化';
+        D.oPerks.appendChild(e);
+      } else {
+        // 按层数降序
+        ids.sort((a, b) => (stacks[b] || 0) - (stacks[a] || 0));
+        for (const id of ids) {
+          const def = (PP.Rogue && PP.Rogue.PERKS) ? PP.Rogue.PERKS.find(k => k.id === id) : null;
+          const n = stacks[id] || 1;
+          const chip = document.createElement('span');
+          chip.className = 'ochip' + (n > 1 ? ' x' : '');
+          chip.textContent = (def ? def.name : id) + (n > 1 ? ' ×' + n : '');
+          D.oPerks.appendChild(chip);
+        }
+      }
+    }
+
     Hud.show(D.sOver, true);
     Hud.show(D.hud, false);
   };
+
+  /* 结算页附加局外收益（由 game.js 调用） */
+  Hud.showReward = function (info) {
+    if (!D) return;
+    if (D.oGain) D.oGain.textContent = '+' + (info && info.gain || 0);
+    if (D.oCoins) D.oCoins.textContent = (info && info.coins != null) ? info.coins : 0;
+    if (D.oTitle) D.oTitle.textContent = (info && info.cleared) ? '任务完成' : '你死了';
+  };
+
+  /* ---------------- 商店 ---------------- */
+  Hud.openShop = function () {
+    if (!D) return;
+    renderShop();
+    const shop = document.getElementById('s-shop');
+    if (shop) shop.classList.remove('hide');
+    if (D.sTitle) D.sTitle.classList.add('hide');
+  };
+  Hud.closeShop = function () {
+    const shop = document.getElementById('s-shop');
+    if (shop) shop.classList.add('hide');
+    if (D.sTitle) D.sTitle.classList.remove('hide');
+    Hud.refreshProfile();
+  };
+  Hud.refreshProfile = function () {
+    const S = PP.Save;
+    if (!S) return;
+    const d = S.get();
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('pf-name', d.name || '幸存者');
+    set('pf-uid', (d.uid || '').slice(0, 12));
+    set('pf-coins', d.coins | 0);
+    set('pf-runs', (d.stats && d.stats.runs) | 0);
+    set('pf-best', (d.stats && d.stats.bestScore) | 0);
+    set('pf-kills', (d.stats && d.stats.totalKills) | 0);
+  };
+
+  function renderShop() {
+    const S = PP.Save;
+    const list = document.getElementById('shop-list');
+    const coinsEl = document.getElementById('shop-coins');
+    if (!list || !S) return;
+    if (coinsEl) coinsEl.textContent = S.coins();
+    list.innerHTML = '';
+    for (const b of S.BUFFS) {
+      const lv = S.buffLevel(b.id);
+      const maxed = lv >= b.max;
+      const price = S.buffPrice(b.id);
+      const item = document.createElement('div');
+      item.className = 'shop-item' + (maxed ? ' maxed' : '');
+      const h = document.createElement('h4'); h.textContent = b.name;
+      const p = document.createElement('p'); p.textContent = b.desc;
+      const l = document.createElement('div'); l.className = 'lv';
+      l.textContent = '等级 ' + lv + ' / ' + b.max + (maxed ? ' · 已满' : ' · 价格 ' + price);
+      const btn = document.createElement('button');
+      btn.className = 'btn';
+      btn.textContent = maxed ? '满级' : '购买';
+      btn.disabled = maxed;
+      btn.addEventListener('click', () => {
+        const r = S.buyBuff(b.id);
+        if (r && r.ok) {
+          Hud.toast('已购买 ' + b.name + ' Lv.' + r.level);
+          renderShop();
+        } else if (r) {
+          Hud.toast(r.reason || '无法购买');
+        }
+      });
+      item.appendChild(h); item.appendChild(p); item.appendChild(l); item.appendChild(btn);
+      list.appendChild(item);
+    }
+  }
 })();

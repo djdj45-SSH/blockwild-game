@@ -27,6 +27,18 @@
       height: 0.90, z0: 0,
       dmg: 12, atkRange: 999, atkCd: 1.85, windup: 0.42,
       score: 190, ranged: true, shootRange: 12, projSpeed: 7.2, mass: 1, xp: 20
+    },
+    creeper: {
+      key: 'creeper', hp: 55, speed: 2.05, radius: 0.32,
+      height: 1.05, z0: 0,
+      dmg: 38, atkRange: 1.55, atkCd: 99, windup: 0.95,
+      score: 220, ranged: false, explode: true, blastR: 2.6, mass: 2, xp: 28
+    },
+    spider: {
+      key: 'spider', hp: 26, speed: 3.55, radius: 0.24,
+      height: 0.58, z0: 0,
+      dmg: 5, atkRange: 0.95, atkCd: 0.42, windup: 0.16,
+      score: 130, ranged: false, mass: 0.7, xp: 15
     }
   };
 
@@ -43,7 +55,7 @@
       anim: G.rng.next() * 6.28, bob: 0,
       strafe: G.rng.chance(0.5) ? 1 : -1, strafeT: 1 + G.rng.next() * 2,
       stuck: 0, unstick: 0, unstickDir: 0, spawnT: 0.35,
-      burn: 0, burnDps: 0, lastKiller: 0,
+      burn: 0, burnDps: 0, lastKiller: 0, slow: 0,
       tp: null, ti: 0, retarget: 0
     };
     G.enemies.push(e);
@@ -70,6 +82,7 @@
     e.hp -= amount;
     e.hurt = 0.14;
     if (o.burn) { e.burn = Math.max(e.burn, o.burn); e.burnDps = Math.max(e.burnDps, o.burnDps || 0); }
+    if (o.slow) e.slow = Math.max(e.slow, o.slow);
     const src = o.from || e.tp;
     const dx = e.x - (src ? src.x : e.x + 1), dy = e.y - (src ? src.y : e.y);
     const d = Math.hypot(dx, dy) || 1;
@@ -127,7 +140,8 @@
 
   function grantXp(G, p, amount) {
     if (!p || p.eliminated) return;
-    p.xp += amount;
+    const mul = 1 + ((p.mods && p.mods.xpMul) || 0);
+    p.xp += Math.round(amount * mul);
     let guard = 0;
     while (p.xp >= p.xpNext && p.level < 30 && guard++ < 10) {
       p.xp -= p.xpNext;
@@ -197,6 +211,28 @@
       if (e.windup > 0) {
         e.windup -= dt;
         if (e.windup <= 0) {
+          if (T.explode) {
+            // 爬行者自爆：范围伤害 + 粒子，然后变尸体
+            const R = T.blastR || 2.6;
+            G.bus.emit('explode', { x: e.x, y: e.y, r: R });
+            for (const q of G.playerList) {
+              if (q.downed || q.eliminated) continue;
+              const d = Math.hypot(q.x - e.x, q.y - e.y);
+              if (d < R) G.damagePlayer(q.id, T.dmg * Math.max(0.35, 1 - d / (R * 1.25)), 0, e.x, e.y);
+            }
+            for (let k = 0; k < 16; k++) {
+              const a = G.rng.next() * Math.PI * 2;
+              const sp = 1.2 + G.rng.next() * 3.2;
+              G.particles.push({
+                x: e.x, y: e.y, z: 0.3 + G.rng.next() * 0.5,
+                vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: 1.5 + G.rng.next() * 2.5,
+                life: 0.45 + G.rng.next() * 0.4, size: G.rng.chance(0.4) ? 1.8 : 1.1,
+                tex: G.rng.chance(0.5) ? 'spark' : 'gib'
+              });
+            }
+            E.kill(G, e, false, e.lastKiller);
+            continue;
+          }
           if (!T.ranged) {
             if (dist <= T.atkRange + 0.35 && canSee) G.damagePlayer(p.id, T.dmg, 0, e.x, e.y);
           } else if (canSee && dist <= T.shootRange) {
@@ -212,7 +248,9 @@
       }
 
       if (e.windup <= 0 && e.cd <= 0 && e.spawnT <= 0) {
-        if (!T.ranged && dist <= T.atkRange + 0.3 && canSee) { e.windup = T.windup; e.cd = T.atkCd; G.bus.emit('enemyWindup', { x: e.x, y: e.y }); }
+        if (T.explode) {
+          if (dist <= T.atkRange && canSee) { e.windup = T.windup; e.cd = 99; G.bus.emit('enemyWindup', { x: e.x, y: e.y, creeper: true }); }
+        } else if (!T.ranged && dist <= T.atkRange + 0.3 && canSee) { e.windup = T.windup; e.cd = T.atkCd; G.bus.emit('enemyWindup', { x: e.x, y: e.y }); }
         else if (T.ranged && canSee && dist <= T.shootRange && dist > 0.9) { e.windup = T.windup; e.cd = T.atkCd; }
       }
 
@@ -232,10 +270,12 @@
           if (e.unstick > 0) { e.unstick -= dt; mx = Math.cos(e.unstickDir); my = Math.sin(e.unstickDir); }
         }
       }
+      if (e.slow > 0) e.slow -= dt;
+      const slowMul = e.slow > 0 ? 0.52 : 1;
       const ml = Math.hypot(mx, my);
       if (ml > 1e-4) {
         const inWater = w.inWater(e.x, e.y);
-        const sp = T.speed * (e.windup > 0 ? 0.35 : 1) * (e.spawnT > 0 ? 0 : 1) * (inWater ? 0.6 : 1);
+        const sp = T.speed * (e.windup > 0 ? 0.35 : 1) * (e.spawnT > 0 ? 0 : 1) * (inWater ? 0.6 : 1) * slowMul;
         const ox = e.x, oy = e.y;
         moveEntity(e, (mx / ml) * sp * dt, (my / ml) * sp * dt);
         e.bob += Math.hypot(e.x - ox, e.y - oy) * 6;

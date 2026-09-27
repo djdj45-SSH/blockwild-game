@@ -13,7 +13,7 @@
     fwd: 'w', back: 's', left: 'a', right: 'd',
     turnL: 'q', turnR: 'e', sprint: 'shift',
     reload: 'r', revive: 'f', pause: 'p', mute: 'm',
-    w1: '1', w2: '2', w3: '3'
+    w1: '1', w2: '2', w3: '3', w4: '4', w5: '5'
   };
 
   const DEFAULTS = {
@@ -32,7 +32,7 @@
     fwd: '前进', back: '后退', left: '左移', right: '右移',
     turnL: '左转', turnR: '右转', sprint: '疾跑',
     reload: '装填', revive: '救援', pause: '暂停', mute: '静音',
-    w1: '武器 1', w2: '武器 2', w3: '武器 3'
+    w1: '武器 1', w2: '武器 2', w3: '武器 3', w4: '武器 4', w5: '武器 5'
   };
   S.NICE = NICE;
 

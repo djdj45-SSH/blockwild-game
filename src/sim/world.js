@@ -25,7 +25,7 @@
   /* 每格墙高（世界单位，1 = 一格方块）：3D 化后这直接决定轮廓
      规则：玩家眼高 0.62 → 建筑墙必须明显高于眼高才有"建筑感"；
            树干必须高于树冠，才能看出是一棵树 */
-  World.wallHeight = [1, 2.0, 1.9, 2.2, 1.7, 3.2, 2.2, 1.6, 1.0, 3.0];
+  World.wallHeight = [1, 2.0, 1.9, 2.2, 1.7, 2.85, 2.45, 1.6, 1.0, 3.0];
 
   function idx(x, y) { return y * SIZE + x; }
 
@@ -100,15 +100,71 @@
       wall[idx(x, y)] = 0; floor[idx(x, y)] = 0;
     }
     World.pois.push({ type: 'camp', x: sx + 0.5, y: sy + 0.5, r: 6 });
+    repairPoiAccess(wall, floor);
     return World;
   };
 
+  /* 保证每个 POI 从出生点可达：BFS 后对不可达的 POI 清一条最短通路 */
+  function repairPoiAccess(wall, floor) {
+    const sx = (World.spawn.x) | 0, sy = (World.spawn.y) | 0;
+    const seen = new Uint8Array(SIZE * SIZE);
+    const q = [idx(sx, sy)];
+    seen[q[0]] = 1;
+    for (let h = 0; h < q.length; h++) {
+      const cur = q[h];
+      const cx = cur % SIZE, cy = (cur / SIZE) | 0;
+      const nb = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      for (let k = 0; k < 4; k++) {
+        const nx = cx + nb[k][0], ny = cy + nb[k][1];
+        if (nx < 2 || ny < 2 || nx >= SIZE - 2 || ny >= SIZE - 2) continue;
+        const ni = idx(nx, ny);
+        if (seen[ni] || wall[ni]) continue;
+        seen[ni] = 1;
+        q.push(ni);
+      }
+    }
+    for (const poi of World.pois) {
+      const px = poi.x | 0, py = poi.y | 0;
+      if (seen[idx(px, py)]) continue;
+      // 朝出生点方向清出一条走廊（宽 2）
+      let x = px, y = py;
+      let guard = 0;
+      while ((x !== sx || y !== sy) && guard++ < SIZE * 2) {
+        wall[idx(x, y)] = 0;
+        if (floor[idx(x, y)] === 5) floor[idx(x, y)] = 0;
+        if (x < sx) x++; else if (x > sx) x--;
+        else if (y < sy) y++; else if (y > sy) y--;
+        if (x >= 2 && y >= 2 && x < SIZE - 2 && y < SIZE - 2) {
+          wall[idx(x, y)] = 0;
+          if (floor[idx(x, y)] === 5) floor[idx(x, y)] = 0;
+          // 走廊加宽一格
+          if (x + 1 < SIZE - 2) { wall[idx(x + 1, y)] = 0; if (floor[idx(x + 1, y)] === 5) floor[idx(x + 1, y)] = 0; }
+          if (y + 1 < SIZE - 2) { wall[idx(x, y + 1)] = 0; if (floor[idx(x, y + 1)] === 5) floor[idx(x, y + 1)] = 0; }
+        }
+      }
+    }
+  }
+
   function plantTree(wall, x, y, rng) {
-    const h = 1;
     wall[idx(x, y)] = 5;                       // 树干（1 格）
+    // 3×3 树冠：留少量缝隙，避免树丛连成死墙
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       if (!dx && !dy) continue;
-      if (rng.next() < 0.75 && wall[idx(x + dx, y + dy)] === 0) wall[idx(x + dx, y + dy)] = 6;
+      if (wall[idx(x + dx, y + dy)] !== 0) continue;
+      const edge = Math.abs(dx) + Math.abs(dy) === 2;
+      if (edge && rng.next() < 0.35) continue;
+      wall[idx(x + dx, y + dy)] = 6;
+    }
+    // 约 1/4 是大树：再补一圈稀疏树叶
+    if (rng.next() < 0.25) {
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        if (Math.abs(dx) < 2 && Math.abs(dy) < 2) continue;
+        if (dx * dx + dy * dy > 6) continue;
+        if (rng.next() < 0.55) continue;
+        const nx = x + dx, ny = y + dy;
+        if (nx < 3 || ny < 3 || nx >= SIZE - 3 || ny >= SIZE - 3) continue;
+        if (wall[idx(nx, ny)] === 0) wall[idx(nx, ny)] = 6;
+      }
     }
   }
 

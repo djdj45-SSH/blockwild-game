@@ -13,6 +13,7 @@
 
   /* ---------------- 玩家 ---------------- */
   function makePlayer(G, id, name) {
+    const NW = PP.WEAPONS.length;
     const p = {
       id: id, name: name || ('P' + id),
       x: PP.World.spawn.x, y: PP.World.spawn.y, a: PP.World.spawn.a,
@@ -21,17 +22,13 @@
       radius: 0.26, invuln: 0,
       downed: false, downT: 0, eliminateAt: 45, eliminated: false, reviveProg: 0, _helper: null,
       weapon: 0,
-      insts: [
-        { def: 0, rarity: 0, affixes: [] },
-        { def: 1, rarity: 0, affixes: [] },
-        { def: 2, rarity: 0, affixes: [] }
-      ],
-      unlocked: [true, false, false],
-      mag: [PP.WEAPONS[0].mag, 0, 0],
-      reserve: [Infinity, 0, 0],
+      insts: PP.WEAPONS.map((w, i) => ({ def: i, rarity: 0, affixes: [] })),
+      unlocked: PP.WEAPONS.map((w, i) => i === 0),
+      mag: PP.WEAPONS.map((w, i) => (i === 0 ? w.mag : 0)),
+      reserve: PP.WEAPONS.map((w, i) => (i === 0 ? w.startReserve : 0)),
       fireCd: 0, reloadT: 0, muzzleT: 0, kickPitch: 0, weaponRaise: 0,
       bobT: 0, bobAmt: 0, speed: 0,
-      mods: {}, perks: [], level: 1, xp: 0, xpNext: 100, pendingPerks: 0, perkChoices: null,
+      mods: {}, perks: [], perkStacks: {}, level: 1, xp: 0, xpNext: 100, pendingPerks: 0, perkChoices: null,
       score: 0, kills: 0, headshots: 0, shotsFired: 0, shotsHit: 0,
       combo: 0, comboT: 0, bestCombo: 0,
       viewShake: 0, viewOffsetY: 0, hurtFlash: 0,
@@ -69,7 +66,7 @@
       friendlyFire: 0.35,      // 队友伤害系数（房主可调 0 / 0.35 / 1）
       me: null, player: null,  // 客户端视角（服务器为 null）
       // 表现层字段（由 syncView 从本地玩家拷贝，供渲染/HUD 直接读）
-      weapon: 0, mag: [12, 0, 0], reserve: [Infinity, 0, 0], unlocked: [true, false, false],
+      weapon: 0, mag: [12, 0, 0, 0, 0], reserve: [Infinity, 0, 0, 0, 0], unlocked: [true, false, false, false, false],
       muzzleT: 0, weaponSwayX: 0, weaponBobY: 0, weaponRaise: 0,
       kickPitch: 0, viewOffsetY: 0, shake: 0, hurtFlash: 0,
       combo: 0, headshots: 0, shotsFired: 0, shotsHit: 0
@@ -124,11 +121,12 @@
       }
       if (kind === 'ammo') {
         let got = false;
-        for (let i = 1; i < 3; i++) {
+        for (let i = 1; i < PP.WEAPONS.length; i++) {
           if (!p.unlocked[i]) continue;
           const cap = PP.WEAPONS[i].maxReserve * (1 + (p.mods.ammoMax || 0));
+          const add = PP.WEAPONS[i].ammoPick || Math.max(8, Math.round(PP.WEAPONS[i].mag * 0.8));
           if (p.reserve[i] < cap) {
-            p.reserve[i] = Math.min(cap, p.reserve[i] + (i === 1 ? 8 : 50));
+            p.reserve[i] = Math.min(cap, p.reserve[i] + add);
             got = true;
           }
         }
@@ -136,8 +134,9 @@
         G.bus.emit('pickup', { id: p.id, kind: kind, text: '+弹药' });
         return true;
       }
-      if (kind === 'shotgun' || kind === 'pulse') {
-        const i = kind === 'shotgun' ? 1 : 2;
+      const wid = (PP.WEAPON_PICK && PP.WEAPON_PICK[kind] !== undefined) ? PP.WEAPON_PICK[kind] : -1;
+      if (wid >= 1) {
+        const i = wid;
         const luck = (p.mods.luck || 0);
         const inst = PP.Rogue.rollWeapon(G.rng, i, G.threat + luck * 2);
         if (!p.unlocked[i]) {
@@ -166,8 +165,9 @@
         }
         // 重复武器 → 当弹药
         const cap = PP.WEAPONS[i].maxReserve * (1 + (p.mods.ammoMax || 0));
+        const add = PP.WEAPONS[i].ammoPick || Math.max(8, Math.round(PP.WEAPONS[i].mag * 0.8));
         if (p.reserve[i] < cap) {
-          p.reserve[i] = Math.min(cap, p.reserve[i] + (i === 1 ? 8 : 50));
+          p.reserve[i] = Math.min(cap, p.reserve[i] + add);
           G.bus.emit('pickup', { id: p.id, kind: 'ammo', text: '+弹药' });
           return true;
         }
@@ -176,10 +176,20 @@
       if (kind === 'chest') {
         const r = G.rng.next();
         let give;
-        if (r < 0.30) give = 'health';
-        else if (r < 0.50) give = 'ammo';
-        else if (r < 0.72) give = 'armor';
-        else give = p.unlocked[1] ? (p.unlocked[2] ? 'ammo' : 'pulse') : 'shotgun';
+        if (r < 0.26) give = 'health';
+        else if (r < 0.44) give = 'ammo';
+        else if (r < 0.60) give = 'armor';
+        else {
+          // 优先发未解锁的主武器，否则随机一把高品质武器
+          const locked = [];
+          for (let i = 1; i < PP.WEAPONS.length; i++) if (!p.unlocked[i]) locked.push(i);
+          if (locked.length) give = PP.WEAPONS[locked[0]].pick;
+          else {
+            const pool = [];
+            for (let i = 1; i < PP.WEAPONS.length; i++) pool.push(PP.WEAPONS[i].pick);
+            give = pool[(G.rng.next() * pool.length) | 0];
+          }
+        }
         G.bus.emit('chest', { id: p.id, give: give });
         return G.tryPickup(p, give, item);
       }
@@ -221,8 +231,23 @@
   };
   Sim.setInput = function (G, id, input) {
     const p = G.players.get(id);
-    if (!p) return;
-    for (const k in input) p.input[k] = input[k];
+    if (!p || !input) return;
+    // 只接受已知输入字段并夹紧，防止联机端伪造异常值
+    const t = p.input;
+    const num = (v, d) => (typeof v === 'number' && isFinite(v)) ? v : d;
+    t.fwd = Core().clamp(num(input.fwd, 0), -1, 1);
+    t.strafe = Core().clamp(num(input.strafe, 0), -1, 1);
+    t.turn = Core().clamp(num(input.turn, 0), -12, 12);
+    t.pitch = Core().clamp(num(input.pitch, 0), -12, 12);
+    t.sprint = !!input.sprint;
+    t.fire = !!input.fire;
+    t.firePressed = !!input.firePressed;
+    t.revive = !!input.revive;
+    t.reload = !!input.reload;
+    const sw = input.switchTo;
+    let st = (typeof sw === 'number' && isFinite(sw)) ? (sw | 0) : -1;
+    if (st > 20 || st < -2) st = -1;
+    t.switchTo = st;
   };
 
   /* ---------------- 武器 ---------------- */
@@ -251,7 +276,8 @@
       Sim.startReload(G, p);
       return;
     }
-    p.mag[p.weapon]--;
+    // 节俭词条：有概率不耗弹
+    if (!(s.ammosave && G.rng.chance(s.ammosave / 100))) p.mag[p.weapon]--;
     p.fireCd = s.cd;
     p.muzzleT = 0.06;
     p.kickPitch += 0.020 * s.kick;
@@ -261,20 +287,27 @@
 
     let anyHit = false, anyHead = false;
     const maxHits = 1 + (s.pierce || 0);
-    for (let i = 0; i < s.pellets; i++) {
+    const pellets = s.pellets + (s.multishot || 0);
+    // overheat 可叠加：每层 +35%（上限 3 层）
+    const ohStack = p.mods.overheat || 0;
+    const overheat = (ohStack && p.hp < p.maxHp * 0.4) ? (1 + 0.35 * Math.min(3, ohStack)) : 1;
+    for (let i = 0; i < pellets; i++) {
       const hits = PP.Ent.hitscan(G, p, p.a, p.pitch, s.spread, s.range, maxHits);
       let chained = 0;
       for (const h of hits) {
         if (h.kind === 'enemy') {
-          let dmg = s.dmg;
+          let dmg = s.dmg * overheat;
+          if (s.crit && G.rng.chance(s.crit / 100)) dmg *= 2;
           if (s.falloff && h.dist > s.range * 0.45) {
             dmg *= Math.max(0.35, 1 - (h.dist - s.range * 0.45) / (s.range * 0.75));
           }
           if (h.head) dmg *= s.headMul;
           h.e.lastKiller = p.id;
+          const burn = Math.max(s.burn || 0, s.burnBase || 0);
           PP.Ent.damage(G, h.e, dmg, h.head, {
             killerId: p.id, knock: s.knockback,
-            burn: s.burn ? s.burn : 0, burnDps: s.burn ? s.dmg * 0.25 : 0
+            burn: burn, burnDps: burn ? Math.max(3, dmg * 0.25) : 0,
+            slow: s.slow || 0
           });
           anyHit = true; if (h.head) anyHead = true;
           // 链式传导
@@ -299,7 +332,7 @@
             });
           }
         } else if (h.kind === 'player') {
-          G.damagePlayer(h.p.id, s.dmg * (h.head ? s.headMul : 1), p.id, h.x, h.y);
+          G.damagePlayer(h.p.id, s.dmg * overheat * (h.head ? s.headMul : 1), p.id, h.x, h.y);
           anyHit = true;
           G.bus.emit('friendlyHit', { id: p.id, target: h.p.id });
         }
@@ -322,21 +355,35 @@
   Sim.rollPerkChoices = function (G, p) {
     const taken = p.perks.slice();
     p.perkChoices = PP.Rogue.rollPerks(G.rng, taken, 3);
-    G.bus.emit('perkChoices', { id: p.id, list: p.perkChoices.map(k => ({ id: k.id, name: k.name, desc: k.desc })) });
+    G.bus.emit('perkChoices', {
+      id: p.id,
+      list: p.perkChoices.map(k => ({
+        id: k.id, name: k.name, desc: k.desc,
+        stacks: (p.perkStacks && p.perkStacks[k.id]) || 0
+      }))
+    });
     return p.perkChoices;
   };
   Sim.choosePerk = function (G, p, perkId) {
     if (!p || p.pendingPerks <= 0) return false;
     const def = PP.Rogue.PERKS.find(k => k.id === perkId);
-    if (!def || p.perks.indexOf(perkId) >= 0) return false;
+    if (!def) return false;
+    // 允许叠加：同一 Perk 可重复选取，效果累加
     def.apply(p.mods, p);
     p.perks.push(perkId);
+    if (!p.perkStacks) p.perkStacks = {};
+    p.perkStacks[perkId] = (p.perkStacks[perkId] || 0) + 1;
     p.pendingPerks--;
     p.perkChoices = null;
     if (def.id === 'ammo') {
-      for (let i = 1; i < 3; i++) if (p.unlocked[i]) p.reserve[i] = PP.WEAPONS[i].maxReserve * (1 + (p.mods.ammoMax || 0));
+      for (let i = 1; i < PP.WEAPONS.length; i++) if (p.unlocked[i]) p.reserve[i] = PP.WEAPONS[i].maxReserve * (1 + (p.mods.ammoMax || 0));
     }
-    G.bus.emit('perkTaken', { id: p.id, perk: perkId, name: def.name });
+    const stack = p.perkStacks[perkId];
+    G.bus.emit('perkTaken', {
+      id: p.id, perk: perkId,
+      name: def.name + (stack > 1 ? ' ×' + stack : ''),
+      stacks: stack
+    });
     return true;
   };
 
@@ -385,11 +432,17 @@
 
     if (p.downed) { p.downT += dt; return; }
 
+    // 自愈 Perk
+    if (p.mods.regen && p.hp > 0 && p.hp < p.maxHp) {
+      p.hp = Math.min(p.maxHp, p.hp + p.mods.regen * dt);
+    }
+
     // 武器
-    if (inp.switchTo >= 0 && inp.switchTo < 3) { Sim.switchWeapon(G, p, inp.switchTo); inp.switchTo = -1; }
+    const NW = PP.WEAPONS.length;
+    if (inp.switchTo >= 0 && inp.switchTo < NW) { Sim.switchWeapon(G, p, inp.switchTo); inp.switchTo = -1; }
     else if (inp.switchTo === -2) {          // 移动端"换枪"按钮：循环切到下一把已解锁的
-      for (let i = 1; i <= 3; i++) {
-        const n = (p.weapon + i) % 3;
+      for (let i = 1; i <= NW; i++) {
+        const n = (p.weapon + i) % NW;
         if (p.unlocked[n]) { Sim.switchWeapon(G, p, n); break; }
       }
       inp.switchTo = -1;
@@ -448,8 +501,11 @@
     if (Math.hypot(s.x - anchor.x, s.y - anchor.y) <= 25 && !PP.World.flowReachable(fi, s.x, s.y)) return;
     let pick = 'zombie';
     const r = G.rng.next();
-    if (G.threat >= 3 && r < 0.28) pick = 'skeleton';
-    else if (G.threat >= 2 && r < 0.35) pick = 'husk';
+    if (G.threat >= 4 && r < 0.12) pick = 'creeper';
+    else if (G.threat >= 3 && r < 0.10) pick = 'spider';
+    else if (G.threat >= 3 && r < 0.34) pick = 'skeleton';
+    else if (G.threat >= 2 && r < 0.40) pick = 'husk';
+    else if (G.threat >= 5 && r > 0.92) pick = 'creeper';
     const d = Math.hypot(s.x - anchor.x, s.y - anchor.y);
     if (!PP.World.losClear(anchor.x, anchor.y, s.x, s.y) || d > 22) {
       PP.Ent.spawn(G, pick, s.x, s.y);
@@ -470,8 +526,11 @@
     // 与 updatePlayer 同规则：后退不能冲刺
     const backing = fwd < -0.1;
     const sprintMul = (inp.sprint && !backing) ? (1.5 + ((mods || {}).sprint || 0)) : 1;
+    let wms = 1;
+    if (p.wStats) wms = p.wStats().moveSpeed || 1;
+    else if (p.insts && p.insts[p.weapon]) wms = PP.Rogue.stats(p.insts[p.weapon], mods || {}).moveSpeed || 1;
     const speed = 3.3 * sprintMul * (backing ? 0.72 : 1) * (inWater ? 0.6 : 1) * crawl *
-      (1 + ((mods || {}).moveSpeed || 0));
+      wms * (1 + ((mods || {}).moveSpeed || 0));
     const dirX = Math.cos(p.a), dirY = Math.sin(p.a);
     const vx = (dirX * fwd - dirY * strafe) * speed;
     const vy = (dirY * fwd + dirX * strafe) * speed;

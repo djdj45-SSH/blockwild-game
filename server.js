@@ -20,7 +20,8 @@ const ROOT = __dirname;
 global.window = global;
 const SIM_FILES = [
   'src/core.js', 'src/sim/weapons.js', 'src/sim/roguelike.js',
-  'src/sim/world.js', 'src/sim/entities.js', 'src/sim/sim.js', 'src/sim/snapshot.js'
+  'src/sim/world.js', 'src/sim/entities.js', 'src/sim/sim.js', 'src/sim/snapshot.js',
+  'src/client/save.js'
 ];
 for (const f of SIM_FILES) {
   vm.runInThisContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), { filename: f });
@@ -171,10 +172,11 @@ httpServer.on('upgrade', (req, socket) => {
   ].join('\r\n'));
   socket.setNoDelay(true);
 
-  const c = { socket: socket, id: 0, name: '?', alive: true };
+  const c = { socket: socket, id: 0, name: '?', alive: true, lastSeen: Date.now(), msgWin: 0, winStart: 0 };
   clients.push(c);
 
   socket.on('data', (chunk) => {
+    c.lastSeen = Date.now();
     const buf = Buffer.concat([bufPool, chunk]);
     const used = parse(buf, (op, payload) => {
       if (op === 8) { c.alive = false; try { socket.destroy(); } catch (e) { } return; }
@@ -200,13 +202,34 @@ httpServer.on('upgrade', (req, socket) => {
 });
 
 function handleText(c, txt) {
+  // 消息体积 / 频率限制
+  if (typeof txt !== 'string' || txt.length > 8192) return;
+  const now = Date.now();
+  if (!c.winStart || now - c.winStart > 1000) { c.winStart = now; c.msgWin = 0; }
+  if (++c.msgWin > 120) return;   // 每秒最多 120 条，超出直接丢弃
+
   let m;
   try { m = JSON.parse(txt); } catch (e) { return; }
+  if (!m || typeof m !== 'object' || typeof m.t !== 'string') return;
+  c.lastSeen = now;
+
+  // 应用层心跳：任何消息都会刷新 lastSeen，hb 用于空闲保活
+  if (m.t === 'hb') { sendJSON(c, { t: 'hb', ts: now }); return; }
+
   if (m.t === 'join') {
+    if (c.id) return;   // 已加入不允许重复 join
     c.id = nextId++;
-    c.name = (m.name || ('玩家' + c.id)).slice(0, 12);
+    const rawName = String(m.name || ('玩家' + c.id)).replace(/[\x00-\x1f]/g, '').trim();
+    c.name = (rawName || ('玩家' + c.id)).slice(0, 12);
     const p = PP.Sim.addPlayer(G, c.id, c.name);
     p.colorIdx = c.id % 4;
+    // 局外增益（客户端上报，服务端夹紧后套用，保证权威一致）
+    if (m.meta) {
+      const meta = (PP.Save && PP.Save.sanitizeMeta)
+        ? PP.Save.sanitizeMeta(m.meta)
+        : null;
+      if (meta && PP.Save.applyToPlayer) PP.Save.applyToPlayer(p, meta);
+    }
     sendJSON(c, {
       t: 'welcome', id: c.id, seed: G.seed,
       tickRate: 30, snapshotHz: 20, friendlyFire: G.friendlyFire,
@@ -217,15 +240,16 @@ function handleText(c, txt) {
     return;
   }
   if (!c.id) return;
-  if (m.t === 'input') { PP.Sim.setInput(G, c.id, m.i || {}); return; }
-  if (m.t === 'perk' && m.p) {
+  if (m.t === 'input') { PP.Sim.setInput(G, c.id, m.i); return; }
+  if (m.t === 'perk' && typeof m.p === 'string') {
     const p = G.players.get(c.id);
     if (p) PP.Sim.choosePerk(G, p, m.p);
     return;
   }
   if (m.t === 'perkRequest') {
     const p = G.players.get(c.id);
-    if (p) PP.Sim.rollPerkChoices(G, p);
+    // 没有待选强化点时不发卡，避免「能开卡但选不上」
+    if (p && p.pendingPerks > 0) PP.Sim.rollPerkChoices(G, p);
     return;
   }
   if (m.t === 'restart' && clients.length && clients[0] === c) {
@@ -233,7 +257,8 @@ function handleText(c, txt) {
     return;
   }
   if (m.t === 'ff' && clients.length && clients[0] === c) {
-    G.friendlyFire = Math.max(0, Math.min(1, Number(m.v) || 0));
+    const v = Number(m.v);
+    G.friendlyFire = isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.35;
     broadcastJSON({ t: 'ff', v: G.friendlyFire });
     return;
   }
@@ -254,6 +279,15 @@ setInterval(() => {
   let steps = 0;
   while (acc >= TICK_MS && steps < 5) { PP.Sim.tick(G); acc -= TICK_MS; steps++; }
   if (steps >= 5) acc = 0;
+
+  // 空闲踢人：25 秒无任何消息视为掉线
+  for (let i = clients.length - 1; i >= 0; i--) {
+    const c = clients[i];
+    if (now - (c.lastSeen || now) > 25000) {
+      console.log('  [超时] ' + c.name + ' 无心跳，断开');
+      try { c.socket.destroy(); } catch (e) { }
+    }
+  }
 
   if (!clients.length) return;
   // 20Hz 快照（按人 AOI 裁剪 → 每人一份）
@@ -281,7 +315,9 @@ setInterval(() => {
         perks: p.perks.slice(), xp: p.xp, xpNext: p.xpNext, level: p.level,
         pendingPerks: p.pendingPerks, score: p.score, kills: p.kills,
         headshots: p.headshots, combo: p.combo, downed: p.downed, eliminated: p.eliminated,
-        reviveProg: p.reviveProg, downT: p.downT, hp: p.hp, ap: p.ap, maxHp: p.maxHp, maxAp: p.maxAp
+        reviveProg: p.reviveProg, downT: p.downT, hp: p.hp, ap: p.ap, maxHp: p.maxHp, maxAp: p.maxAp,
+        shotsFired: p.shotsFired, shotsHit: p.shotsHit, bestCombo: p.bestCombo,
+        perkStacks: p.perkStacks || {}
       });
     }
     broadcastJSON({ t: 'players', list: playerListJSON() });

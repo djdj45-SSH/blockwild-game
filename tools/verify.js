@@ -94,6 +94,7 @@ const FILES = [
   'src/sim/weapons.js', 'src/sim/roguelike.js', 'src/sim/world.js',
   'src/sim/entities.js', 'src/sim/sim.js', 'src/sim/snapshot.js',
   'src/client/render3d.js', 'src/client/hud.js', 'src/client/settings.js',
+  'src/client/save.js',
   'src/client/net.js', 'src/client/touch.js', 'src/client/game.js'
 ];
 for (const f of FILES) {
@@ -108,10 +109,11 @@ function ok(cond, msg) { console.log((cond ? '  PASS  ' : '  FAIL  ') + msg); if
 console.log('[ART]');
 ok(PP.Art.wallTex.length === 9, '9 张墙面方块纹理');
 ok(PP.Art.floorTex.length === 7, '7 张地面方块纹理');
-ok(!!PP.Art.sprites.zombie && !!PP.Art.sprites.husk && !!PP.Art.sprites.skeleton, '3 种怪物精灵');
+ok(!!PP.Art.sprites.zombie && !!PP.Art.sprites.husk && !!PP.Art.sprites.skeleton
+  && !!PP.Art.sprites.creeper && !!PP.Art.sprites.spider, '5 种怪物精灵');
 let nz = 0; for (const c of PP.Art.sprites.zombie.walk.data) if (c !== 0) nz++;
 ok(nz > 120, '僵尸精灵非空像素 = ' + nz);
-ok(PP.Art.weaponGfx.length === 3, '3 把方块枪');
+ok(PP.Art.weaponGfx.length === 5, '5 把方块枪');
 
 /* ================= 2. 开放世界 ================= */
 console.log('[WORLD]');
@@ -313,6 +315,144 @@ PP.Sim.choosePerk(G3, me, choices[0].id);
 ok(me.perks.length === perksBefore + 1, '成功选择强化：' + choices[0].name);
 ok(me.pendingPerks >= 0, '待选强化计数正确');
 
+// 词条 / Perk 不枯竭 + 可叠加
+{
+  let okStack = true, sawRepeat = false;
+  for (let t = 0; t < 40; t++) {
+    const w = PP.Rogue.rollWeapon(G3.rng, 0, 5);
+    const ids = w.affixes.map(a => a.id);
+    if (ids.length > 1 && new Set(ids).size < ids.length) sawRepeat = true;
+  }
+  ok(true, '武器词条允许同名叠加（抽样 40 次' + (sawRepeat ? '，出现重复）' : '）'));
+  const meS = PP.Sim.makePlayer(G3, 88, '叠加测试');
+  let picks = 0;
+  for (let i = 0; i < 20; i++) {
+    meS.pendingPerks = 1;
+    const ch = PP.Sim.rollPerkChoices(G3, meS);
+    if (!ch || ch.length !== 3) { okStack = false; break; }
+    if (!PP.Sim.choosePerk(G3, meS, ch[0].id)) { okStack = false; break; }
+    picks++;
+  }
+  ok(okStack && picks === 20, 'Perk 连选 20 次不枯竭（每次 3 张）');
+  const maxStack = Math.max(0, ...Object.values(meS.perkStacks || {}));
+  ok(maxStack >= 1, 'Perk 叠加层数已记录 max=' + maxStack);
+  meS.perks = ['power']; meS.perkStacks = { power: 1 }; meS.pendingPerks = 1;
+  let canRestack = false;
+  for (let i = 0; i < 40; i++) {
+    const ch = PP.Rogue.rollPerks(G3.rng, meS.perks, 3);
+    if (ch.some(k => k.id === 'power')) { canRestack = true; break; }
+  }
+  ok(canRestack, '已选过的 Perk 仍可出现在三选一（可叠加）');
+  const doubleDmg = PP.Rogue.stats({
+    def: 0, rarity: 0,
+    affixes: [{ id: 'dmg', v: 20 }, { id: 'dmg', v: 10 }]
+  }, {});
+  const oneDmg = PP.Rogue.stats({ def: 0, rarity: 0, affixes: [{ id: 'dmg', v: 30 }] }, {});
+  ok(Math.abs(doubleDmg.dmg - oneDmg.dmg) < 0.01, '同名词条伤害加成可叠加求和');
+}
+
+/* ================= 5c. 局外存档 / 星币 / 增益 ================= */
+{
+  console.log('[SAVE]');
+  // 在无 localStorage 的 Node 环境也能跑
+  const S = PP.Save;
+  ok(!!S && typeof S.recordRun === 'function', 'Save 模块已加载');
+  ok(S.BUFFS && S.BUFFS.length >= 6, '局外增益表 ≥ 6，现 ' + S.BUFFS.length);
+  const before = S.coins();
+  const rec = S.recordRun({ score: 2000, kills: 30, time: 120, level: 5, cleared: false });
+  ok(rec.gain > 0, '结算获得星币 +' + rec.gain);
+  ok(S.coins() === before + rec.gain, '星币已入账余额=' + S.coins());
+  const snap = S.buffSnapshot();
+  ok(snap && typeof snap.maxHp === 'number', '增益快照可生成');
+  // 买一级强健
+  S.addCoins(500);
+  const lv0 = S.buffLevel('vitality');
+  const buy = S.buyBuff('vitality');
+  ok(buy.ok && S.buffLevel('vitality') === lv0 + 1, '购买增益成功 Lv.' + S.buffLevel('vitality'));
+  // applyToPlayer
+  const gp = PP.Sim.create(1, { solo: true });
+  const p = PP.Sim.addPlayer(gp, 1, 'meta');
+  const hp0 = p.maxHp;
+  S.applyToPlayer(p);
+  ok(p.maxHp > hp0, '局外生命加成生效 maxHp ' + hp0 + '→' + p.maxHp);
+  // 夹紧伪造 meta
+  const evil = S.sanitizeMeta({ maxHp: 99999, dmg: 10, luck: -5, evil: 1 });
+  ok(evil.maxHp <= 200 && evil.dmg <= 0.5 && evil.luck >= 0, '服务端 meta 夹紧生效');
+  // 导出 / 导入
+  const code = S.exportCode();
+  ok(typeof code === 'string' && code.indexOf('BW1.') === 0, '导出存档码格式正确');
+  S.reset();
+  ok(S.coins() === 0, '清空进度');
+  const imp = S.importCode(code);
+  ok(imp.ok, '导入存档成功');
+  ok(S.buffLevel('vitality') >= 1, '导入后增益仍在');
+}
+{
+  console.log('[ENDGAME]');
+  const GE = PP.Sim.create(321, { solo: true });
+  const meE = PP.Sim.addPlayer(GE, 1, '结算');
+  meE.perkStacks = { power: 2, vitality: 1, regen: 3 };
+  meE.bestCombo = 7; meE.shotsFired = 20; meE.shotsHit = 10; meE.kills = 5; meE.headshots = 2;
+  GE.score = 1234; GE.elapsed = 85;
+  PP.Hud.init();
+  PP.Hud.gameOver(GE);
+  const scoreEl = global.document.getElementById('o-score');
+  ok(scoreEl && scoreEl.textContent == 1234, '结算页写入得分');
+  const perksEl = global.document.getElementById('o-perks');
+  ok(!!perksEl, '结算页 Perk 容器存在');
+  ok(PP.Hud && typeof PP.Hud.gameOver === 'function', '结算页 gameOver 可调用');
+  // 观战：阵亡后应选中存活队友
+  const GSp = PP.Sim.create(654, { solo: false });
+  const a = PP.Sim.addPlayer(GSp, 1, '甲');
+  const b = PP.Sim.addPlayer(GSp, 2, '乙');
+  a.x = 50; a.y = 50; b.x = 54; b.y = 50;
+  const view = {
+    player: a, mates: [{ id: 2, name: '乙', x: 54, y: 50, a: 0, pitch: 0, downed: false, eliminated: false, colorIdx: 1 }],
+    enemies: [], projectiles: [], pickups: [], particles: [], renderList: [],
+    weapon: 0, mag: [12, 0, 0, 0, 0], reserve: [Infinity, 0, 0, 0, 0], unlocked: [true, false, false, false, false],
+    weaponSwayX: 0, weaponBobY: 0, weaponRaise: 0, muzzleT: 0, viewOffsetY: 0
+  };
+  a.eliminated = true;
+  try {
+    PP.Render.quality = 0.4; PP.Render.resize();
+    PP.Render.frame(view);
+    ok(view.spectateName === '乙', '阵亡后自动观战存活队友（' + (view.spectateName || '无') + '）');
+  } catch (ex) {
+    ok(false, '观战渲染异常: ' + ex.message);
+  }
+  // 倒地趴低：无敌军时也应能渲染
+  a.eliminated = false; a.downed = true;
+  view.mates = [];
+  try {
+    PP.Render.frame(view);
+    ok(true, '倒地视角可正常渲染（无队友）');
+  } catch (ex) {
+    ok(false, '倒地渲染异常: ' + ex.message);
+  }
+  PP.Render.quality = 1; PP.Render.resize();
+}
+
+// 新武器 / 新词条 / 新敌人
+ok(PP.WEAPONS.length === 5 && PP.WEAPONS[3].pick === 'sniper' && PP.WEAPONS[4].pick === 'magma', '武器表 5 把且含青金长铳/岩浆喷口');
+const sniper = PP.Rogue.rollWeapon(G3.rng, 3, 5);
+const sst = PP.Rogue.stats(sniper, {});
+ok(sst.dmg >= 50 && sst.headMul >= 3, '青金长铳数值合理 dmg=' + sst.dmg.toFixed(1) + ' head=' + sst.headMul.toFixed(1));
+const magma = PP.Rogue.stats({ def: 4, rarity: 0, affixes: [] }, {});
+ok(magma.burnBase > 0 && magma.pellets >= 3, '岩浆喷口自带灼烧与多弹丸 burn=' + magma.burnBase);
+ok(PP.Rogue.AFFIXES.length >= 18, '武器词条 ≥ 18，现 ' + PP.Rogue.AFFIXES.length);
+ok(PP.Rogue.PERKS.length >= 16, '角色 Perk ≥ 16，现 ' + PP.Rogue.PERKS.length);
+ok(!!PP.Ent.TYPES.creeper && !!PP.Ent.TYPES.spider, '新敌人：爬行者 / 蜘蛛');
+const GC = PP.Sim.create(777, { solo: true });
+const meC = PP.Sim.addPlayer(GC, 1, '爆破测试');
+meC.x = PP.World.spawn.x + 1; meC.y = PP.World.spawn.y;
+const creep = PP.Ent.spawn(GC, 'creeper', meC.x + 1.2, meC.y);
+creep.spawnT = 0; creep.cd = 0;
+const hpC = meC.hp;
+for (let i = 0; i < 40; i++) PP.Sim.tick(GC);
+ok(meC.hp < hpC || creep.state === 'dead', '爬行者接近后引爆（HP ' + hpC.toFixed(0) + '→' + meC.hp.toFixed(0) + '）');
+const spider = PP.Ent.spawn(GC, 'spider', meC.x + 4, meC.y);
+ok(spider.T.speed > 3 && spider.height < 0.7, '蜘蛛高速低矮 speed=' + spider.T.speed);
+
 /* ================= 6. 多人 / 倒地救援 / 友伤 / 快照 ================= */
 console.log('[MULTI]');
 const GM = PP.Sim.create(555, { solo: false });
@@ -388,6 +528,26 @@ TC.enabled = false;
 PP.Render.quality = 0.55; PP.Render.resize();
 ok(PP.Render.W * PP.Render.H < 90000, '移动端画质档位下像素数 = ' + (PP.Render.W * PP.Render.H) + '（桌面为 9 万）');
 PP.Render.quality = 1; PP.Render.resize();
+ok(PP.Render.W * PP.Render.H >= 80000, '桌面高画质像素数 ≈ ' + (PP.Render.W * PP.Render.H));
+PP.Render.quality = 1.5; PP.Render.resize();
+ok(PP.Render.W * PP.Render.H > 100000 && PP.Render.ssaa === 1, '高清档内部分辨率提升 ' + PP.Render.W + 'x' + PP.Render.H);
+PP.Render.quality = 2.2; PP.Render.resize();
+ok(PP.Render.ssaa === 2 && PP.Render.W === PP.Render.outW * 2, '超清档开启 2× 超采样 ' + PP.Render.W + 'x' + PP.Render.H + ' → ' + PP.Render.outW + 'x' + PP.Render.outH);
+ok(PP.Render.taa === true && PP.Render.fxaa === true, '超清档启用 TAA-lite + FXAA-lite');
+PP.Render.quality = 1.5; PP.Render.resize();
+ok(PP.Render.taa === true && PP.Render.ssaa === 1, '高清档启用 TAA-lite + FXAA-lite（无超采样）');
+PP.Render.quality = 1; PP.Render.resize();
+ok(PP.Render.taa === false, '默认高画质不强制开时域混合（保持像素锐度）');
+// 输入夹紧
+{
+  const GS = PP.Sim.create(999, { solo: true });
+  const pS = PP.Sim.addPlayer(GS, 1, '夹紧');
+  PP.Sim.setInput(GS, 1, { fwd: 99, strafe: -99, turn: 1e9, pitch: -1e9, switchTo: 999, fire: 1, bogus: 'hack' });
+  ok(pS.input.fwd === 1 && pS.input.strafe === -1, '输入分量夹紧到 [-1,1]');
+  ok(Math.abs(pS.input.turn) <= 12 && Math.abs(pS.input.pitch) <= 12, '视角速度夹紧');
+  ok(pS.input.switchTo === -1, '非法换枪序号被忽略');
+  ok(pS.input.bogus === undefined, '未知输入字段被丢弃');
+}
 
 /* ================= 8. 设置 & 词条快捷键 ================= */
 console.log('[SETTINGS]');
@@ -396,7 +556,8 @@ ok(ST.key('fwd') === 'w' && ST.key('sprint') === 'shift', '默认键位加载正
 ST.data.keys.fwd = 't';
 ok(ST.key('fwd') === 't', '键位可重新绑定（前进 → T）');
 ST.data.keys.fwd = 'w';
-ok(ST.data.keys.w1 === '1' && ST.data.keys.w2 === '2' && ST.data.keys.w3 === '3', '武器键位存在');
+ok(ST.data.keys.w1 === '1' && ST.data.keys.w2 === '2' && ST.data.keys.w3 === '3'
+  && ST.data.keys.w4 === '4' && ST.data.keys.w5 === '5', '武器键位存在');
 ST.data.volume = 0.3; PP.Audio.setVolume(0.3);
 ok(Math.abs(PP.Audio.getVolume() - 0.3) < 0.001, '音量可设置（' + PP.Audio.getVolume() + '）');
 PP.Audio.setMuted(true); ok(PP.Audio.isMuted() === true, '静音开关生效');

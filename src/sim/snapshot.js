@@ -49,8 +49,8 @@
 
   Snap.BW = BW; Snap.BR = BR;
 
-  const ENEMY_KEYS = ['zombie', 'husk', 'skeleton'];
-  const PICK_KEYS = ['health', 'armor', 'ammo', 'shotgun', 'pulse', 'chest'];
+  const ENEMY_KEYS = ['zombie', 'husk', 'skeleton', 'creeper', 'spider'];
+  const PICK_KEYS = ['health', 'armor', 'ammo', 'shotgun', 'pulse', 'chest', 'sniper', 'magma'];
   Snap.ENEMY_KEYS = ENEMY_KEYS;
   Snap.PICK_KEYS = PICK_KEYS;
 

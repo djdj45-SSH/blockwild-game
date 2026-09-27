@@ -21,8 +21,14 @@
 
   let cvs = null, ctx = null, img = null, buf32 = null;
   let W = 0, H = 0, zb = null, projDist = 0, ccx = 0, ccy = 0;
+  let outW = 0, outH = 0, imgOut = null, bufOut = null, ssaa = 1;
   let colAz = null, rowEl = null;
+  let prev32 = null, fxaaBuf = null;
+  const prevCam = { x: 0, y: 0, a: 0, p: 0, has: false };
   R.quality = 1;
+  R.ssaa = 1;
+  R.taa = false;
+  R.fxaa = false;
 
   const SKY_TOP = { r: 48, g: 126, b: 226 };
   const SKY_HOR = { r: 172, g: 220, b: 248 };
@@ -74,21 +80,54 @@
     R.resize();
   };
 
+  /* 像素预算：q≤1 与旧档位兼容；高清/超清拉高输出像素，超清再开 2× 超采样 */
+  function budgetOf(q) {
+    if (q <= 1.001) return 90000 * q;
+    if (q <= 1.7) return Math.round(90000 * q * q * 0.85);   // 高清 ≈ 165k @1.5
+    return 125000;                                            // 超清：输出适中，靠 SSAA
+  }
+
   R.resize = function () {
     if (!cvs) return;
     const vw = ROOT.innerWidth || 960, vh = ROOT.innerHeight || 600;
     const aspect = vw / vh;
-    const target = 90000 * R.quality;
-    let h = Math.sqrt(target / aspect);
-    h = Math.max(150, Math.min(300, Math.round(h)));
-    let w = Math.round(h * aspect);
-    w = Math.max(220, Math.min(640, w));
-    W = w; H = h;
-    cvs.width = W; cvs.height = H;
+    // 超清档开启 2×2 盒式超采样（空间重建，DLSS 的离线简化版）
+    ssaa = (R.quality > 1.8) ? 2 : 1;
+    R.ssaa = ssaa;
+
+    const target = budgetOf(R.quality);
+    let oh = Math.sqrt(target / aspect);
+    const hi = R.quality >= 1.4;
+    oh = Math.max(150, Math.min(hi ? 540 : (R.quality >= 1 ? 360 : 300), Math.round(oh)));
+    let ow = Math.round(oh * aspect);
+    ow = Math.max(220, Math.min(hi ? 1024 : (R.quality >= 1 ? 720 : 640), ow));
+    outW = ow; outH = oh;
+
+    // 渲染分辨率（SSAA 时是输出的 2 倍）
+    W = ow * ssaa; H = oh * ssaa;
+    cvs.width = outW; cvs.height = outH;
     ctx.imageSmoothingEnabled = false;
-    img = ctx.createImageData(W, H);
-    buf32 = new Uint32Array(img.data.buffer);
+
+    if (ssaa > 1) {
+      // 高分辨率渲染缓冲（不直接 putImageData）
+      const data = new Uint8ClampedArray(W * H * 4);
+      img = { width: W, height: H, data: data };
+      buf32 = new Uint32Array(data.buffer);
+      imgOut = ctx.createImageData(outW, outH);
+      bufOut = new Uint32Array(imgOut.data.buffer);
+    } else {
+      img = ctx.createImageData(W, H);
+      buf32 = new Uint32Array(img.data.buffer);
+      imgOut = img; bufOut = buf32;
+    }
     zb = new Float32Array(W * H);
+    // TAA 历史帧 + FXAA 工作缓冲（仅高清档启用）
+    R.taa = R.quality >= 1.4;
+    R.fxaa = R.quality >= 1.4;
+    prev32 = new Uint32Array(W * H);
+    fxaaBuf = new Uint32Array(outW * outH);
+    prevCam.has = false;
+
     projDist = (W / 2) / FOV_TAN;
     ccx = W / 2; ccy = H / 2;
     colAz = new Float32Array(W);
@@ -96,7 +135,103 @@
     rowEl = new Float32Array(H);
     for (let y = 0; y < H; y++) rowEl[y] = Math.atan2((ccy - y) / projDist, 1);
     R.W = W; R.H = H;
+    R.outW = outW; R.outH = outH;
   };
+
+  /* TAA-lite：世界+精灵与上一帧混合；镜头动得越狠，历史权重越低（减轻拖影） */
+  function taaBlend(G, camObj) {
+    if (!R.taa || !prev32) return;
+    const p = camObj || G.player;
+    if (!p) return;
+    const motion =
+      Math.abs(p.x - prevCam.x) + Math.abs(p.y - prevCam.y) +
+      Math.abs((p.a || 0) - prevCam.a) * 1.5 +
+      Math.abs((p.pitch || 0) - prevCam.p) * 1.5 +
+      Math.abs((G.weaponBobY || 0) % 4) * 0.02;
+    // 静止时历史 ~0.5，快速转动时压到 ~0.08
+    let hist = 0.52 - motion * 1.8;
+    if (hist < 0.08) hist = 0.08;
+    if (hist > 0.52) hist = 0.52;
+    const a = 1 - hist;
+    const n = buf32.length;
+    const ah = (hist * 256) | 0, ac = (a * 256) | 0;
+    for (let i = 0; i < n; i++) {
+      const c = buf32[i], o = prev32[i];
+      const r = (((c & 255) * ac + (o & 255) * ah) >> 8);
+      const g = ((((c >>> 8) & 255) * ac + ((o >>> 8) & 255) * ah) >> 8);
+      const b = ((((c >>> 16) & 255) * ac + ((o >>> 16) & 255) * ah) >> 8);
+      buf32[i] = (0xff000000 | (b << 16) | (g << 8) | r) >>> 0;
+    }
+    prev32.set(buf32);
+    prevCam.x = p.x; prevCam.y = p.y; prevCam.a = p.a || 0; prevCam.p = p.pitch || 0;
+    prevCam.has = true;
+  }
+  R.taaBlend = taaBlend;
+
+  /* FXAA-lite：只柔化高对比斜向边缘，保留硬像素块的整体质感 */
+  function fxaaLite(buf, w, h) {
+    if (w < 4 || h < 4) return;
+    fxaaBuf.set(buf);
+    for (let y = 1; y < h - 1; y++) {
+      const row = y * w;
+      for (let x = 1; x < w - 1; x++) {
+        const i = row + x;
+        const c = fxaaBuf[i];
+        const l = (c & 255) + ((c >>> 8) & 255) + ((c >>> 16) & 255);
+        const lN = lum(fxaaBuf[i - w]), lS = lum(fxaaBuf[i + w]);
+        const lW = lum(fxaaBuf[i - 1]), lE = lum(fxaaBuf[i + 1]);
+        const lNW = lum(fxaaBuf[i - w - 1]), lNE = lum(fxaaBuf[i - w + 1]);
+        const lSW = lum(fxaaBuf[i + w - 1]), lSE = lum(fxaaBuf[i + w + 1]);
+        const rangeMax = Math.max(lN, lS, lW, lE, Math.max(lNW, lNE, lSW, lSE));
+        const rangeMin = Math.min(lN, lS, lW, lE, Math.min(lNW, lNE, lSW, lSE));
+        const range = rangeMax - rangeMin;
+        if (range < 48) continue;
+        // 斜向对比强于正交 → 判定为斜边，做 5 点柔化
+        const diag = Math.abs(lNW - lSE) + Math.abs(lNE - lSW);
+        const orth = Math.abs(lN - lS) + Math.abs(lW - lE);
+        if (diag <= orth * 0.85) continue;
+        const r = (((c & 255) + (fxaaBuf[i - w] & 255) + (fxaaBuf[i + w] & 255) +
+          (fxaaBuf[i - 1] & 255) + (fxaaBuf[i + 1] & 255)) / 5) | 0;
+        const g = (((((c >>> 8) & 255) + ((fxaaBuf[i - w] >>> 8) & 255) + ((fxaaBuf[i + w] >>> 8) & 255) +
+          ((fxaaBuf[i - 1] >>> 8) & 255) + ((fxaaBuf[i + 1] >>> 8) & 255)) / 5) | 0);
+        const b = (((((c >>> 16) & 255) + ((fxaaBuf[i - w] >>> 16) & 255) + ((fxaaBuf[i + w] >>> 16) & 255) +
+          ((fxaaBuf[i - 1] >>> 16) & 255) + ((fxaaBuf[i + 1] >>> 16) & 255)) / 5) | 0);
+        // 一半混合，避免糊掉像素风
+        buf[i] = (0xff000000 |
+          (((((c >>> 16) & 255) + b) >> 1) << 16) |
+          (((((c >>> 8) & 255) + g) >> 1) << 8) |
+          ((((c & 255) + r) >> 1))) >>> 0;
+      }
+    }
+  }
+  function lum(c) { return (c & 255) + ((c >>> 8) & 255) + ((c >>> 16) & 255); }
+
+  /* 2×2 盒式降采样 → 画布（超采样抗锯齿） */
+  function present() {
+    if (ssaa === 1) {
+      if (R.fxaa) fxaaLite(bufOut, outW, outH);
+      ctx.putImageData(imgOut, 0, 0);
+      return;
+    }
+    const s = ssaa;
+    for (let y = 0; y < outH; y++) {
+      const y0 = y * s, y1 = y0 + 1;
+      const row0 = y0 * W, row1 = y1 * W;
+      const orow = y * outW;
+      for (let x = 0; x < outW; x++) {
+        const x0 = x * s, x1 = x0 + 1;
+        const c0 = buf32[row0 + x0], c1 = buf32[row0 + x1];
+        const c2 = buf32[row1 + x0], c3 = buf32[row1 + x1];
+        const r = ((c0 & 255) + (c1 & 255) + (c2 & 255) + (c3 & 255)) >> 2;
+        const g = (((c0 >>> 8) & 255) + ((c1 >>> 8) & 255) + ((c2 >>> 8) & 255) + ((c3 >>> 8) & 255)) >> 2;
+        const b = (((c0 >>> 16) & 255) + ((c1 >>> 16) & 255) + ((c2 >>> 16) & 255) + ((c3 >>> 16) & 255)) >> 2;
+        bufOut[orow + x] = (0xff000000 | (b << 16) | (g << 8) | r) >>> 0;
+      }
+    }
+    if (R.fxaa) fxaaLite(bufOut, outW, outH);
+    ctx.putImageData(imgOut, 0, 0);
+  }
+  R.present = present;
 
   /* ---------------- 相机 ---------------- */
   let camX = 0, camY = 0, camZ = EYE;
@@ -289,13 +424,14 @@
         const tex = wt[id - 1] || wt[0];
         const x0 = tx, x1 = tx + 1, y0 = ty, y1 = ty + 1;
 
-        // 顶面
+        // 顶面（原木用年轮、树叶用叶面，不再错用地板纹理）
         if (camZ > h - 0.001) {
           fpx[0] = x0; fpy[0] = y0; fpz[0] = h; fpu[0] = x0 * TEX; fpv[0] = y0 * TEX;
           fpx[1] = x1; fpy[1] = y0; fpz[1] = h; fpu[1] = x1 * TEX; fpv[1] = y0 * TEX;
           fpx[2] = x1; fpy[2] = y1; fpz[2] = h; fpu[2] = x1 * TEX; fpv[2] = y1 * TEX;
           fpx[3] = x0; fpy[3] = y1; fpz[3] = h; fpu[3] = x0 * TEX; fpv[3] = y1 * TEX;
-          emitFace(ft[Wd.floor[ty * SIZE + tx]] || ft[0], 256, 4, fpx, fpy, fpz, fpu, fpv);
+          const topTex = (PP.Art.wallTopTex && PP.Art.wallTopTex[id - 1]) || tex;
+          emitFace(topTex, 256, 4, fpx, fpy, fpz, fpu, fpv);
         }
 
         // 四个侧面（邻居更矮才画）
@@ -476,12 +612,41 @@
     }
   }
 
+  /* 观战目标：优先未倒地的存活队友，其次最近倒地队友 */
+  function pickSpectate(G) {
+    const me = G.player;
+    const mates = G.mates || [];
+    let bestUp = null, bestUpD = 1e9;
+    let bestDown = null, bestDownD = 1e9;
+    for (const m of mates) {
+      if (!m || m.eliminated) continue;
+      const d = (m.x - me.x) * (m.x - me.x) + (m.y - me.y) * (m.y - me.y);
+      if (m.downed) {
+        if (d < bestDownD) { bestDownD = d; bestDown = m; }
+      } else if (d < bestUpD) {
+        bestUpD = d; bestUp = m;
+      }
+    }
+    return bestUp || bestDown || null;
+  }
+
   /* ---------------- 主帧 ---------------- */
   R.frame = function (G) {
     const Art = PP.Art;
     const p = G.player;
     if (!p) return;
-    setCam(p.x, p.y, EYE + (G.viewOffsetY || 0) * 0.002, p.a, p.pitch || 0);
+
+    // 观战：阵亡 / 倒地时跟随存活队友；无队友则趴低视角
+    let camObj = p;
+    let spectating = false;
+    if (G.mates && G.mates.length && (p.eliminated || p.downed)) {
+      const target = pickSpectate(G);
+      if (target) { camObj = target; spectating = true; }
+    }
+    const selfDown = !spectating && p.downed;
+    const eye = selfDown ? 0.30 : EYE;
+    const pitch = (camObj.pitch !== undefined ? camObj.pitch : camObj.tpitch) || 0;
+    setCam(camObj.x, camObj.y, eye + (G.viewOffsetY || 0) * 0.002, camObj.a || 0, pitch);
 
     zb.fill(0);
     drawGround(G);
@@ -509,6 +674,11 @@
         else list.push({ x: m.x, y: m.y, z: 0, h: 0.98, tex: (m.fireT > 0 ? set.atk : set.walk) });
       }
     }
+    // 自己倒地时画出自己的身体（观战他人时不画）
+    if (!spectating && (p.downed || p.eliminated)) {
+      const set = Art.sprites.player[(p.colorIdx || 0) % Art.sprites.player.length];
+      list.push({ x: p.x, y: p.y, z: 0.02, h: 0.44, tex: set.dead });
+    }
     for (const it of G.pickups) list.push({ x: it.x, y: it.y, z: 0.16 + Math.sin(it.t * 3) * 0.05, h: 0.46, tex: Art.pickups[it.kind] || Art.pickups.ammo });
     for (const b of G.projectiles) list.push({ x: b.x, y: b.y, z: (b.z || 0.6) - 0.16, h: 0.32, tex: Art.bone });
     for (const q of G.particles) list.push({ x: q.x, y: q.y, z: q.z, h: 0.05 * q.size, tex: Art.particle[q.tex] || Art.particle.blood });
@@ -523,32 +693,42 @@
       drawSprite(s.tex, s.x, s.y, s.z, s.h, s.flash);
     }
 
-    // 手中武器
-    const gfx = Art.weaponGfx[G.weapon];
+    // 世界/精灵先做时域混合，再画枪（枪保持锐利不拖影）
+    taaBlend(G, camObj);
+    G.spectateName = spectating ? (camObj.name || '队友') : '';
+
+    // 手中武器：观战 / 阵亡 / 倒地时不画
+    const showGun = !spectating && !p.eliminated && !p.downed;
+    const gfx = showGun ? Art.weaponGfx[G.weapon] : null;
+    const s = ssaa;
     if (gfx) {
-      const gx = Math.round(W / 2 - gfx.idle.w / 2 + G.weaponSwayX);
-      const gy = Math.round(H - gfx.idle.h + G.weaponBobY + G.weaponRaise);
-      blit(gfx.idle, gx, gy);
+      const gw = gfx.idle.w * s, gh = gfx.idle.h * s;
+      const gx = Math.round(W / 2 - gw / 2 + G.weaponSwayX * s);
+      const gy = Math.round(H - gh + (G.weaponBobY + G.weaponRaise) * s);
+      if (s === 1) blit(gfx.idle, gx, gy);
+      else blitScaled(gfx.idle, gx, gy, s);
       if (G.muzzleT > 0) {
         const m = Art.muzzle;
-        const k = 0.7 + Math.random() * 0.6;
-        blitScaled(m, gx + gfx.muzzle[0] - (m.w * k) / 2, gy + gfx.muzzle[1] - (m.h * k) / 2, k);
+        const k = (0.7 + Math.random() * 0.6) * s;
+        blitScaled(m, gx + gfx.muzzle[0] * s - (m.w * k) / 2, gy + gfx.muzzle[1] * s - (m.h * k) / 2, k);
       }
-      ctx.putImageData(img, 0, 0);
+      present();
       if (G.muzzleT > 0) {
-        const mx = gx + gfx.muzzle[0], my = gy + gfx.muzzle[1];
+        const mx = gx + gfx.muzzle[0] * s, my = gy + gfx.muzzle[1] * s;
+        // 枪在渲染坐标系，光晕画在画布上：换算到输出分辨率
+        const mxo = mx / s, myo = my / s;
         const rad = 90 * (G.muzzleT / 0.06);
-        const grd = ctx.createRadialGradient(mx, my, 0, mx, my, Math.max(4, rad));
+        const grd = ctx.createRadialGradient(mxo, myo, 0, mxo, myo, Math.max(4, rad));
         const a = Math.min(0.5, G.muzzleT * 7);
         grd.addColorStop(0, 'rgba(255,235,170,' + a.toFixed(3) + ')');
         grd.addColorStop(1, 'rgba(255,170,60,0)');
         ctx.globalCompositeOperation = 'lighter';
         ctx.fillStyle = grd;
-        ctx.fillRect(0, 0, W, H);
+        ctx.fillRect(0, 0, outW, outH);
         ctx.globalCompositeOperation = 'source-over';
       }
     } else {
-      ctx.putImageData(img, 0, 0);
+      present();
     }
 
     drawMinimap(G);
@@ -591,7 +771,7 @@
     const STRIDE = 3, S = 1;
     const Wd = PP.World, SIZE = Wd.SIZE;
     const mw = Math.ceil(SIZE / STRIDE), mh = mw;
-    const ox = Math.round((W - mw) / 2), oy = 6;
+    const ox = Math.round((outW - mw) / 2), oy = 6;
     ctx.fillStyle = 'rgba(10,20,14,0.62)';
     ctx.fillRect(ox - 2, oy - 2, mw + 4, mh + 4);
     ctx.strokeStyle = 'rgba(200,255,190,0.35)';
@@ -624,7 +804,7 @@
     }
     for (const e of G.enemies) {
       if (e.state !== 'alive') continue;
-      ctx.fillStyle = e.type === 'husk' ? '#e8c078' : (e.type === 'skeleton' ? '#f0f0e0' : '#7fd45a');
+      ctx.fillStyle = e.type === 'husk' ? '#e8c078' : (e.type === 'skeleton' ? '#f0f0e0' : e.type === 'creeper' ? '#6fdc4a' : e.type === 'spider' ? '#b070d0' : '#7fd45a');
       ctx.fillRect(ox + (e.x / STRIDE | 0) - 1, oy + (e.y / STRIDE | 0) - 1, 2, 2);
     }
     ctx.fillStyle = '#ffffff';

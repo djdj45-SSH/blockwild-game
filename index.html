@@ -47,6 +47,8 @@
       <div class="wpn active" id="wp0"><b>1</b><span>铁手铳</span><i id="w0">&infin;</i></div>
       <div class="wpn locked" id="wp1"><b>2</b><span>双管猎枪</span><i id="w1">--</i></div>
       <div class="wpn locked" id="wp2"><b>3</b><span>红石脉冲</span><i id="w2">--</i></div>
+      <div class="wpn locked" id="wp3"><b>4</b><span>青金长铳</span><i id="w3">--</i></div>
+      <div class="wpn locked" id="wp4"><b>5</b><span>岩浆喷口</span><i id="w4">--</i></div>
     </div>
 
     <div class="hud-br">
@@ -114,6 +116,8 @@
             <option value="0.4">低（省电）</option>
             <option value="0.7">中</option>
             <option value="1">高</option>
+            <option value="1.5">高清</option>
+            <option value="2.2">超清（超采样）</option>
           </select>
         </div>
         <div class="srow"><span>队友伤害</span>
@@ -137,23 +141,28 @@
 
   <!-- ================= TITLE ================= -->
   <div id="s-title" class="screen">
-    <div class="panel">
-      <h1>方块<span>荒野</span></h1>
-      <p class="tag">BLOCKWILD · 开放世界 · 第一人称像素射击</p>
+    <div class="panel title-panel">
+      <div class="title-top">
+        <div>
+          <h1>方块<span>荒野</span></h1>
+          <p class="tag">BLOCKWILD · 开放世界 · 第一人称像素射击</p>
+        </div>
+        <div class="profile-card">
+          <div class="profile-name"><b id="pf-name">幸存者</b><em id="pf-uid">—</em></div>
+          <div class="profile-coins"><span>星币</span><b id="pf-coins">0</b></div>
+          <div class="profile-stats">
+            <span>局数 <b id="pf-runs">0</b></span>
+            <span>最高分 <b id="pf-best">0</b></span>
+            <span>总击杀 <b id="pf-kills">0</b></span>
+          </div>
+        </div>
+      </div>
+
       <div class="brief">
         一片程序生成的方块大陆，怪物从林子、废墟和沙漠里不断涌来。<br />
-        找到<b>补给箱</b>换更好的枪，活得更久，走得更远。
+        找到<b>补给箱</b>换更好的枪，活得更久，走得更远。局外用<b>星币</b>买永久增益。
       </div>
-      <div class="keys">
-        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移动</div>
-        <div><kbd>MOUSE</kbd> 瞄准 / 转视角</div>
-        <div><kbd>左键</kbd> 射击</div>
-        <div><kbd>R</kbd> 装填</div>
-        <div><kbd>SHIFT</kbd> 疾跑</div>
-        <div><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 切换武器</div>
-        <div><kbd>F</kbd> 救援倒地队友</div>
-        <div><kbd>ESC</kbd> 暂停 · <kbd>M</kbd> 静音</div>
-      </div>
+
       <div class="lobby">
         <input id="inp-name" maxlength="12" placeholder="你的名字" />
         <input id="inp-addr" placeholder="服务器地址 如 192.168.1.5:8080" />
@@ -161,12 +170,54 @@
       <div class="lobbybtns">
         <button id="btn-solo" class="btn">单人开始</button>
         <button id="btn-online" class="btn alt">局域网联机</button>
+        <button id="btn-shop" class="btn ghost">增益商店</button>
         <button id="btn-set-title" class="btn ghost">设置</button>
       </div>
+
+      <div class="save-row">
+        <button id="btn-export" class="tinybtn">导出存档</button>
+        <button id="btn-import" class="tinybtn">导入存档</button>
+        <button id="btn-reset-save" class="tinybtn danger">清空进度</button>
+        <span class="tiny">数据保存在<b>本机浏览器</b>，换设备请先导出存档码</span>
+      </div>
+
+      <div class="keys">
+        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移动</div>
+        <div><kbd>MOUSE</kbd> 瞄准</div>
+        <div><kbd>左键</kbd> 射击 · <kbd>R</kbd> 装填</div>
+        <div><kbd>1</kbd>–<kbd>5</kbd> 切换武器</div>
+        <div><kbd>SHIFT</kbd> 疾跑 · <kbd>F</kbd> 救援</div>
+        <div><kbd>ESC</kbd> 暂停 · <kbd>M</kbd> 静音</div>
+      </div>
       <p class="tiny">
-        联机：先在任意一台机器上跑 <b>node server.js</b>，其他人用浏览器打开它打印的局域网地址 → 填名字 → 点“局域网联机”。人数无上限。<br />
+        联机：任意机器跑 <b>node server.js</b>，其他人打开局域网地址。人数无上限。<br />
         小地图黄点 = 补给箱，蓝点 = 队友，橙点 = 倒地队友
       </p>
+    </div>
+  </div>
+
+  <!-- ================= SHOP ================= -->
+  <div id="s-shop" class="screen hide">
+    <div class="panel shop-panel">
+      <h2>增益商店</h2>
+      <p class="tag">用星币购买永久加成 · 对下一局生效</p>
+      <div class="shop-coins">星币 <b id="shop-coins">0</b></div>
+      <div id="shop-list" class="shop-list"></div>
+      <div class="setbtns">
+        <button id="btn-shop-close" class="btn">返回</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= IMPORT DIALOG ================= -->
+  <div id="s-import" class="screen hide">
+    <div class="panel small">
+      <h2>导入存档</h2>
+      <textarea id="import-text" rows="5" placeholder="粘贴以 BW1. 开头的存档码"></textarea>
+      <div class="setbtns">
+        <button id="btn-import-ok" class="btn">导入</button>
+        <button id="btn-import-cancel" class="btn ghost">取消</button>
+      </div>
     </div>
   </div>
 
@@ -176,13 +227,15 @@
       <h2>已暂停</h2>
       <div class="keys compact">
         <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移动 · <kbd>SHIFT</kbd> 疾跑</div>
-        <div><kbd>左键</kbd> 射击 · <kbd>R</kbd> 装填 · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 换枪</div>
+        <div><kbd>左键</kbd> 射击 · <kbd>R</kbd> 装填 · <kbd>1</kbd>–<kbd>5</kbd> 换枪</div>
       </div>
       <div class="qset">
         <span>画质</span>
         <button class="qbtn" data-q="0.4">低</button>
         <button class="qbtn" data-q="0.7">中</button>
         <button class="qbtn" data-q="1">高</button>
+        <button class="qbtn" data-q="1.5">高清</button>
+        <button class="qbtn" data-q="2.2">超清</button>
       </div>
       <button id="btn-resume" class="btn">继续游戏</button>
       <button id="btn-restart-p" class="btn ghost">重新开始</button>
@@ -193,7 +246,12 @@
   <!-- ================= GAME OVER ================= -->
   <div id="s-over" class="screen hide">
     <div class="panel small">
-      <h2 class="dead">你死了</h2>
+      <h2 class="dead" id="o-title">你死了</h2>
+      <div class="reward-box">
+        <span>本局星币</span>
+        <b id="o-gain">+0</b>
+        <em>余额 <i id="o-coins">0</i></em>
+      </div>
       <div class="stats">
         <div><span>最终得分</span><b id="o-score">0</b></div>
         <div><span>存活时间</span><b id="o-time">0:00</b></div>
@@ -203,7 +261,15 @@
         <div><span>命中率</span><b id="o-acc">0%</b></div>
         <div><span>最高连击</span><b id="o-combo">0</b></div>
       </div>
-      <button id="btn-restart" class="btn">再来一次</button>
+      <div class="operk">
+        <div class="olabel">本局强化</div>
+        <div id="o-perks"></div>
+      </div>
+      <div class="lobbybtns">
+        <button id="btn-restart" class="btn">再来一次</button>
+        <button id="btn-to-shop" class="btn alt">去商店</button>
+        <button id="btn-to-title" class="btn ghost">回到主页</button>
+      </div>
     </div>
   </div>
 </div>
@@ -217,6 +283,7 @@
 <script src="src/sim/entities.js"></script>
 <script src="src/sim/sim.js"></script>
 <script src="src/sim/snapshot.js"></script>
+<script src="src/client/save.js"></script>
 <script src="src/client/render3d.js"></script>
 <script src="src/client/hud.js"></script>
 <script src="src/client/settings.js"></script>

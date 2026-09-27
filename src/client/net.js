@@ -18,6 +18,12 @@
   /* ---------------- 视图模型 ---------------- */
   function makeView(seed) {
     PP.World.generate(seed);
+    const NW = (PP.WEAPONS && PP.WEAPONS.length) || 5;
+    const mag0 = PP.WEAPONS ? PP.WEAPONS.map((w, i) => (i === 0 ? w.mag : 0)) : [12, 0, 0, 0, 0];
+    const res0 = PP.WEAPONS ? PP.WEAPONS.map((w, i) => (i === 0 ? w.startReserve : 0)) : [Infinity, 0, 0, 0, 0];
+    const unl0 = PP.WEAPONS ? PP.WEAPONS.map((w, i) => i === 0) : [true, false, false, false, false];
+    const inst0 = PP.WEAPONS ? PP.WEAPONS.map((w, i) => ({ def: i, rarity: 0, affixes: [] }))
+      : [{ def: 0, rarity: 0, affixes: [] }, { def: 1, rarity: 0, affixes: [] }, { def: 2, rarity: 0, affixes: [] }];
     const V = {
       isView: true, seed: seed, state: 'playing',
       bus: new (PP.Core.Bus)(),
@@ -26,12 +32,17 @@
         pitch: 0, pitchBase: 0, hp: 100, ap: 0, maxHp: 100, maxAp: 100,
         weapon: 0, downed: false, eliminated: false, reviveProg: 0,
         bobT: 0, bobAmt: 0, speed: 0, level: 1, xp: 0, xpNext: 100, pendingPerks: 0,
-        mods: {}, insts: [{ def: 0, rarity: 0, affixes: [] }, { def: 1, rarity: 0, affixes: [] }, { def: 2, rarity: 0, affixes: [] }],
-        perks: [], mag: [12, 0, 0], reserve: [Infinity, 0, 0], unlocked: [true, false, false],
-        score: 0, kills: 0, headshots: 0, combo: 0, comboMult: function () { return 1; }
+        mods: {}, insts: inst0.slice(),
+        perks: [], mag: mag0.slice(), reserve: res0.slice(), unlocked: unl0.slice(),
+        score: 0, kills: 0, headshots: 0, combo: 0,
+        comboMult: function () { return 1; },
+        wStats: function () {
+          const inst = (this.insts && this.insts[this.weapon]) || { def: 0, rarity: 0, affixes: [] };
+          return PP.Rogue.stats(inst, this.mods || {});
+        }
       },
       mates: [], enemies: [], projectiles: [], pickups: [], particles: [], renderList: [],
-      weapon: 0, mag: [12, 0, 0], reserve: [Infinity, 0, 0], unlocked: [true, false, false],
+      weapon: 0, mag: mag0.slice(), reserve: res0.slice(), unlocked: unl0.slice(),
       muzzleT: 0, weaponSwayX: 0, weaponBobY: 0, weaponRaise: 0,
       kickPitch: 0, viewOffsetY: 0, shake: 0, hurtFlash: 0,
       threat: 1, score: 0, kills: 0, combo: 0, time: 0, elapsed: 0,
@@ -52,22 +63,32 @@
       ws.onopen = () => {
         clearTimeout(to);
         Net.connected = true;
-        ws.send(JSON.stringify({ t: 'join', name: name }));
+        Net.lastAlive = Date.now();
+        startHeartbeat();
+        const meta = (PP.Save && PP.Save.buffSnapshot) ? PP.Save.buffSnapshot() : null;
+        ws.send(JSON.stringify({ t: 'join', name: name, meta: meta }));
         if (cb) cb('joining');
       };
       ws.onmessage = (ev) => {
-        if (typeof ev.data === 'string') handleMsg(JSON.parse(ev.data), resolve);
-        else applySnapshot(new DataView(ev.data));
+        Net.lastAlive = Date.now();
+        if (typeof ev.data === 'string') {
+          let m;
+          try { m = JSON.parse(ev.data); } catch (e) { return; }
+          handleMsg(m, resolve);
+        } else applySnapshot(new DataView(ev.data));
       };
       ws.onclose = () => {
+        clearTimeout(to);
         Net.connected = false;
+        stopHeartbeat();
         if (Net.onStatus) Net.onStatus('closed');
       };
-      ws.onerror = () => { clearTimeout(to); reject(new Error('连接失败')); };
+      ws.onerror = () => { clearTimeout(to); stopHeartbeat(); reject(new Error('连接失败')); };
     });
   };
 
   Net.disconnect = function () {
+    stopHeartbeat();
     if (Net.ws) { try { Net.ws.close(); } catch (e) { } }
     Net.ws = null; Net.connected = false; Net.mode = 'solo';
   };
@@ -78,8 +99,23 @@
   };
   Net.sendInput = function (inp) { Net.send({ t: 'input', i: inp }); };
 
+  /* 心跳：空闲时每 5 秒发一条，服务端 25 秒无消息会踢人 */
+  let hbTimer = null;
+  function startHeartbeat() {
+    stopHeartbeat();
+    hbTimer = setInterval(() => {
+      if (Net.connected) Net.send({ t: 'hb' });
+    }, 5000);
+  }
+  function stopHeartbeat() {
+    if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
+  }
+  Net.stopHeartbeat = stopHeartbeat;
+
   /* ---------------- 消息 ---------------- */
   function handleMsg(m, resolve) {
+    if (!m || typeof m.t !== 'string') return;
+    if (m.t === 'hb') return;   // 心跳回包，只需刷新 lastAlive（onmessage 已做）
     if (m.t === 'welcome') {
       Net.id = m.id;
       Net.mode = 'online';

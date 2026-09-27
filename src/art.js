@@ -60,39 +60,42 @@
 
   /* ---------------- 方块调色板 ---------------- */
   const C = {
-    grass: rgb(122, 200, 76), grassDark: rgb(96, 168, 58),
+    grass: rgb(118, 192, 72), grassDark: rgb(94, 162, 56), grassLight: rgb(142, 210, 92),
     dirt: rgb(150, 108, 66), dirtDark: rgb(122, 86, 52),
-    stone: rgb(170, 170, 170), stoneDark: rgb(140, 140, 140),
+    stone: rgb(168, 168, 170), stoneDark: rgb(138, 138, 142),
     cobble: rgb(154, 154, 154),
     plank: rgb(206, 164, 96), plankDark: rgb(170, 130, 70),
-    log: rgb(160, 122, 66), logDark: rgb(122, 90, 48),
+    log: rgb(160, 122, 66), logDark: rgb(122, 90, 48), logTop: rgb(186, 148, 88),
     sand: rgb(238, 226, 170), sandDark: rgb(214, 200, 146),
     sandst: rgb(232, 218, 150), sandstDark: rgb(206, 190, 122),
     brick: rgb(196, 92, 70), brickMortar: rgb(226, 214, 200),
-    leaves: rgb(88, 178, 66), leavesDark: rgb(60, 132, 44),
+    leaves: rgb(82, 168, 60), leavesDark: rgb(54, 124, 40), leavesLight: rgb(112, 196, 78),
     cactus: rgb(96, 168, 64), cactusDark: rgb(70, 130, 46),
     water: rgb(64, 148, 220), waterLight: rgb(120, 190, 246),
     bedrock: rgb(86, 86, 92), bedrockDark: rgb(56, 56, 62),
-    redstone: rgb(226, 62, 46), lapis: rgb(60, 110, 220),
+    redstone: rgb(226, 62, 46), lapis: rgb(48, 96, 210), lapisL: rgb(90, 140, 240),
+    magma: rgb(232, 96, 36), magmaHot: rgb(255, 180, 60),
     snow: rgb(240, 246, 252),
-    outline: rgb(34, 30, 28)
+    outline: rgb(28, 24, 22)
   };
 
   /* ---------------- 纹理 ---------------- */
   function makeTextures() {
     const T = {};
+    // 草地：2x2 色块 + 轻微抖动，避免盐粒噪声
     T.grassTop = block16(101, (x, y, r) => {
-      let c = (x + y) % 3 === 0 ? C.grassDark : C.grass;
-      return jit(c, r, 0.18);
+      const n = PP.Core.h2(x >> 1, y >> 1, 1011);
+      let c = n < 0.30 ? C.grassDark : (n > 0.78 ? C.grassLight : C.grass);
+      return jit(c, r, 0.06);
     });
     T.grassSide = block16(102, (x, y, r) => {
-      if (y === 0) return jit(C.grass, r, 0.14);
-      const edge = y <= 2 + (r() < 0.5 ? 0 : 1) || (y === 3 && r() < 0.45);
-      if (edge) return jit(C.grass, r, 0.18);
-      return jit((x * 7 + y * 3) % 5 === 0 ? C.dirtDark : C.dirt, r, 0.16);
+      if (y === 0) return jit(C.grass, r, 0.08);
+      const edge = y <= 2 + ((PP.Core.h2(x, 3, 22) < 0.5) ? 0 : 1) || (y === 3 && PP.Core.h2(x, 4, 33) < 0.4);
+      if (edge) return jit(PP.Core.h2(x >> 1, y >> 1, 55) < 0.35 ? C.grassDark : C.grass, r, 0.08);
+      return jit(PP.Core.h2(x >> 1, y >> 1, 66) < 0.3 ? C.dirtDark : C.dirt, r, 0.08);
     });
-    T.dirt = block16(103, (x, y, r) => jit((x * 5 + y * 3) % 4 === 0 ? C.dirtDark : C.dirt, r, 0.18));
-    T.stone = block16(104, (x, y, r) => jit((x * 3 + y * 7) % 6 === 0 ? C.stoneDark : C.stone, r, 0.12));
+    T.dirt = block16(103, (x, y, r) => jit(PP.Core.h2(x >> 1, y >> 1, 77) < 0.3 ? C.dirtDark : C.dirt, r, 0.08));
+    T.stone = block16(104, (x, y, r) => jit(PP.Core.h2(x >> 1, y >> 1, 88) < 0.28 ? C.stoneDark : C.stone, r, 0.07));
     T.cobble = block16(105, (x, y, r) => {
       const k = ((x * 13 + y * 7) % 11);
       return jit(k < 2 ? C.stoneDark : (k > 8 ? C.stone : C.cobble), r, 0.14);
@@ -103,9 +106,23 @@
       return jit(C.plank, r, 0.12);
     });
     T.log = block16(107, (x, y, r) => {
-      if (x === 0 || x === 15) return jit(C.logDark, r, 0.1);
-      if ((x * 5 + y * 3) % 7 === 0) return jit(C.logDark, r, 0.12);
-      return jit(C.log, r, 0.12);
+      if (x === 0 || x === 15) return jit(C.logDark, r, 0.08);
+      // 纵向木纹：几条深色筋
+      if (x === 4 || x === 9 || x === 13) return jit(C.logDark, r, 0.08);
+      return jit(x === 6 || x === 11 ? C.logTop : C.log, r, 0.08);
+    });
+    // 原木顶面：年轮
+    T.logTop = block16(118, (x, y, r) => {
+      const dx = x - 7.5, dy = y - 7.5;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d > 7.4) return jit(C.logDark, r, 0.06);
+      const ring = Math.floor(d) % 2 === 0;
+      return jit(ring ? C.logTop : C.log, r, 0.06);
+    });
+    T.cactusTop = block16(119, (x, y, r) => {
+      const dx = x - 7.5, dy = y - 7.5;
+      if (dx * dx + dy * dy > 36) return jit(C.cactusDark, r, 0.06);
+      return jit((x + y) % 5 === 0 ? C.cactusDark : C.cactus, r, 0.08);
     });
     T.sand = block16(108, (x, y, r) => jit((x + y) % 4 === 0 ? C.sandDark : C.sand, r, 0.1));
     T.sandstone = block16(109, (x, y, r) => {
@@ -119,11 +136,13 @@
       return jit(C.brick, r, 0.16);
     });
     T.leaves = block16(111, (x, y, r) => {
-      const k = ((x * 7 + y * 11) % 9);
-      if (k === 0) return jit(C.leavesDark, r, 0.2);
-      if (k < 3) return jit(C.leavesDark, r, 0.1);
-      return jit(C.leaves, r, 0.22);
+      const n2 = PP.Core.h2(x >> 1, y >> 1, 441);
+      const n = PP.Core.h2(x, y, 442);
+      if (n2 < 0.28) return jit(C.leavesDark, r, 0.1);
+      if (n < 0.16) return jit(C.leavesDark, r, 0.08);
+      return jit(n2 > 0.74 ? C.leavesLight : C.leaves, r, 0.1);
     });
+    T.leavesTop = T.leaves;
     T.cactus = block16(112, (x, y, r) => {
       if (x === 0 || x === 15) return jit(C.cactusDark, r, 0.08);
       if (y % 5 === 0 && (x === 3 || x === 12)) return jit(C.snow, r, 0.05);
@@ -157,6 +176,7 @@
       return n;
     }
     T.plankCeil = darken(T.plank, 0.52);
+    T.wallTop = [T.stone, T.plank, T.brick, T.sandstone, T.logTop, T.leavesTop, T.cactusTop, T.redstoneOre, T.bedrock];
     return T;
   }
 
@@ -266,6 +286,100 @@
     '................'
   ];
 
+  // 爬行者：四足躯干 + 经典哭脸
+  const CREEP_WALK = [
+    '................',
+    '................',
+    '..oooooooooooo..',
+    '..oggggggggggo..',
+    '..ogwwoggwwgo...',
+    '..ogwkoggkwgo...',
+    '..oggggggggggo..',
+    '..oggkkkkkkggo..',
+    '..oggkkkkkkggo..',
+    '..oggggggggggo..',
+    '.ooggggggggggoo.',
+    '.ogobbbbbbboggo.',
+    '.ogobbbbbbboggo.',
+    '.ogobbbbbbboggo.',
+    '.ooggggggggggoo.',
+    '..ogg......ggo..',
+    '..ogg......ggo..',
+    '..oggo....oggo..',
+    '..oooo....oooo..',
+    '................'
+  ];
+
+  const CREEP_ATK = [
+    '................',
+    '................',
+    '..oooooooooooo..',
+    '..ollllllllllo..',
+    '..olwwollwwlo...',
+    '..olwkollkwlo...',
+    '..ollllllllllo..',
+    '..ollkkkkkkklo..',
+    '..ollkkkkkkklo..',
+    '..ollllllllllo..',
+    '.oolllllllllloo.',
+    '.olollllllloloo.',
+    '.olollllllloloo.',
+    '.olollllllloloo.',
+    '.oolllllllllloo.',
+    '..oll......llo..',
+    '..oll......llo..',
+    '..ollo....ollo..',
+    '..oooo....oooo..',
+    '................'
+  ];
+
+  // 蜘蛛：宽体低矮
+  const SPIDER_WALK = [
+    '................',
+    '................',
+    '.o..........o...',
+    '.oo.ooooooo.oo..',
+    '.ogoogwwwwgogo..',
+    '.oggoogwwgoggo..',
+    '.oggoogwwgoggo..',
+    'ooggobbbbbbggo.o',
+    'oogggggggggggoo.',
+    '.ooggbbbbbbggo..',
+    '.ooggggggggggo..',
+    '..oggo....oggo..',
+    '..oggo....oggo..',
+    '.ogo........ogo.',
+    '.ogo........ogo.',
+    '.oo..........oo.',
+    '................',
+    '................',
+    '................',
+    '................'
+  ];
+
+  const SPIDER_ATK = [
+    '................',
+    '................',
+    '.o..........o...',
+    '.oo.ollllll.oo..',
+    '.oloogwwwwgolo..',
+    '.olloogwwgollo..',
+    '.olloogwwgollo..',
+    'oollollllllllo.o',
+    'oollllllllllllo.',
+    '.oollolllllllo..',
+    '.oollllllllllo..',
+    '..ollo....ollo..',
+    '..ollo....ollo..',
+    '.olo........olo.',
+    '.olo........olo.',
+    '.oo..........oo.',
+    '................',
+    '................',
+    '................',
+    '................'
+  ];
+
   const SKEL_ATK = [
     '................',
     '................',
@@ -291,20 +405,28 @@
 
   const PALS = {
     zombie: {
-      o: rgb(38, 66, 30), g: rgb(112, 184, 78), l: rgb(146, 214, 106), d: rgb(78, 138, 56),
-      b: rgb(64, 100, 184), p: rgb(52, 66, 140), w: rgb(244, 250, 232), k: rgb(32, 32, 26), m: rgb(38, 66, 30)
+      o: rgb(22, 42, 16), g: rgb(112, 184, 78), l: rgb(146, 214, 106), d: rgb(78, 138, 56),
+      b: rgb(52, 88, 168), p: rgb(40, 54, 124), w: rgb(244, 250, 232), k: rgb(18, 18, 14), m: rgb(22, 42, 16)
     },
     husk: {
-      o: rgb(88, 62, 24), g: rgb(226, 196, 122), l: rgb(246, 226, 168), d: rgb(184, 156, 92),
-      b: rgb(148, 92, 60), p: rgb(110, 70, 48), w: rgb(255, 248, 216), k: rgb(58, 42, 18), m: rgb(88, 62, 24)
+      o: rgb(58, 40, 14), g: rgb(226, 196, 122), l: rgb(246, 226, 168), d: rgb(184, 156, 92),
+      b: rgb(140, 84, 52), p: rgb(98, 58, 38), w: rgb(255, 248, 216), k: rgb(36, 24, 8), m: rgb(58, 40, 14)
     },
     skeleton: {
-      o: rgb(58, 58, 66), g: rgb(232, 232, 220), l: rgb(255, 255, 252), d: rgb(170, 170, 160),
-      b: rgb(216, 216, 204), p: rgb(150, 150, 140), w: rgb(30, 30, 28), k: rgb(30, 30, 28), m: rgb(58, 58, 66)
+      o: rgb(28, 28, 34), g: rgb(210, 210, 198), l: rgb(242, 242, 236), d: rgb(150, 150, 140),
+      b: rgb(188, 188, 176), p: rgb(120, 120, 112), w: rgb(18, 18, 16), k: rgb(18, 18, 16), m: rgb(28, 28, 34)
+    },
+    creeper: {
+      o: rgb(18, 48, 18), g: rgb(96, 186, 72), l: rgb(132, 214, 96), d: rgb(62, 132, 48),
+      b: rgb(70, 150, 56), p: rgb(48, 110, 40), w: rgb(18, 18, 16), k: rgb(12, 18, 10), m: rgb(18, 48, 18)
+    },
+    spider: {
+      o: rgb(18, 12, 22), g: rgb(70, 48, 88), l: rgb(110, 78, 130), d: rgb(42, 28, 54),
+      b: rgb(52, 34, 68), p: rgb(30, 18, 40), w: rgb(255, 80, 70), k: rgb(10, 8, 12), m: rgb(18, 12, 22)
     },
     dead: {
-      o: rgb(52, 40, 34), g: rgb(126, 92, 74), l: rgb(158, 122, 96), d: rgb(96, 68, 54),
-      b: rgb(112, 76, 66), p: rgb(84, 58, 52), w: rgb(112, 92, 80), k: rgb(48, 36, 30), m: rgb(52, 40, 34)
+      o: rgb(40, 30, 26), g: rgb(110, 80, 64), l: rgb(140, 106, 84), d: rgb(82, 58, 46),
+      b: rgb(96, 66, 56), p: rgb(70, 48, 42), w: rgb(96, 78, 68), k: rgb(36, 26, 22), m: rgb(40, 30, 26)
     }
   };
 
@@ -365,10 +487,42 @@
       [18, 38, 3, 28, OL], [65, 38, 3, 28, OL]
     ]);
 
+    /* 青金长铳 */
+    const sniper = gun([
+      [40, 0, 8, 28, OL], [42, 2, 4, 24, IRON_D], [42, 2, 4, 3, IRON_L],   // 细长枪管
+      [38, 26, 12, 8, OL], [40, 28, 8, 4, IRON],
+      [36, 4, 16, 8, OL], [38, 6, 12, 4, OBS], [40, 7, 8, 2, C.lapis],     // 瞄准镜
+      [34, 30, 20, 16, OL], [36, 32, 16, 12, IRON], [36, 32, 16, 3, IRON_L],
+      [38, 36, 12, 3, C.lapis], [38, 41, 12, 2, C.lapisL],
+      [32, 44, 18, 8, OL], [34, 46, 14, 4, WOOD_D],
+      [28, 44, 14, 24, OL], [30, 46, 10, 20, WOOD], [30, 46, 10, 3, WOOD_L],
+      [22, 40, 12, 26, SKIN], [22, 40, 12, 3, SKIN_L], [22, 63, 12, 3, SKIN_D],
+      [48, 36, 12, 30, OL], [50, 38, 8, 26, WOOD], [50, 38, 8, 3, WOOD_L],
+      [52, 44, 4, 18, WOOD_D],
+      [58, 38, 12, 28, SKIN], [58, 38, 12, 3, SKIN_L], [58, 63, 12, 3, SKIN_D],
+      [20, 40, 3, 26, OL], [69, 40, 3, 26, OL]
+    ]);
+
+    /* 岩浆喷口 */
+    const magma = gun([
+      [34, 0, 20, 14, OL], [36, 2, 16, 10, OBS], [38, 4, 12, 6, RED], [40, 5, 8, 4, RED_L],
+      [32, 12, 24, 24, OL], [34, 14, 20, 20, rgb(70, 48, 36)],
+      [36, 18, 4, 12, C.magma], [48, 18, 4, 12, C.magma], [42, 20, 6, 8, C.magmaHot],
+      [30, 34, 28, 16, OL], [32, 36, 24, 12, rgb(90, 58, 40)], [32, 36, 24, 3, rgb(130, 88, 56)],
+      [38, 40, 12, 4, C.magmaHot],
+      [24, 36, 14, 30, OL], [26, 38, 10, 26, OBS], [26, 38, 10, 3, rgb(84, 76, 108)],
+      [52, 36, 14, 30, OL], [54, 38, 10, 26, OBS], [54, 38, 10, 3, rgb(84, 76, 108)],
+      [20, 40, 12, 26, SKIN], [20, 40, 12, 3, SKIN_L], [20, 63, 12, 3, SKIN_D],
+      [58, 40, 12, 26, SKIN], [58, 40, 12, 3, SKIN_L], [58, 63, 12, 3, SKIN_D],
+      [18, 40, 3, 26, OL], [69, 40, 3, 26, OL]
+    ]);
+
     Art.weaponGfx = [
       { idle: pistol, muzzle: [43, 3], kick: 1.0 },
       { idle: shotgun, muzzle: [43, 3], kick: 2.4 },
-      { idle: pulse, muzzle: [44, 4], kick: 0.55 }
+      { idle: pulse, muzzle: [44, 4], kick: 0.55 },
+      { idle: sniper, muzzle: [43, 3], kick: 2.2 },
+      { idle: magma, muzzle: [43, 3], kick: 0.3 }
     ];
   }
 
@@ -433,6 +587,14 @@
         t.rect(4, 8, 8, 4, rgb(52, 46, 72)); t.rect(5, 9, 6, 2, rgb(238, 72, 56));
         t.rect(6, 5, 1, 3, rgb(238, 72, 56)); t.rect(9, 5, 1, 3, rgb(238, 72, 56));
       }),
+      sniper: box(rgb(48, 96, 210), rgb(90, 140, 240), OL2, (t) => {
+        t.rect(4, 8, 8, 3, rgb(210, 214, 222)); t.rect(5, 6, 2, 4, rgb(240, 244, 250));
+        t.rect(10, 7, 1, 3, rgb(240, 244, 250));
+      }),
+      magma: box(rgb(180, 70, 30), rgb(232, 110, 40), OL2, (t) => {
+        t.rect(4, 8, 8, 4, rgb(52, 36, 28)); t.rect(5, 9, 6, 2, rgb(255, 180, 60));
+        t.rect(6, 5, 2, 3, rgb(232, 96, 36)); t.rect(9, 6, 2, 3, rgb(255, 180, 60));
+      }),
       chest: box(rgb(168, 122, 62), rgb(210, 164, 92), OL2, (t) => {
         t.rect(2, 8, 12, 2, rgb(120, 84, 40)); t.rect(7, 8, 2, 3, rgb(240, 214, 120));
       })
@@ -447,6 +609,8 @@
     Art.tex = T;
     // 墙：id -> 纹理
     Art.wallTex = [T.stone, T.plank, T.brick, T.sandstone, T.log, T.leaves, T.cactus, T.redstoneOre, T.bedrock];
+    // 顶面：id -> 纹理（原木用年轮，树叶用叶面，不再错用地面）
+    Art.wallTopTex = T.wallTop;
     // 地面：id -> 纹理
     Art.floorTex = [T.grassTop, T.dirt, T.sand, T.stone, T.plank, T.water, T.snow];
 
@@ -464,6 +628,18 @@
       atk: bake(SKEL_ATK, PALS.skeleton, 16, 20),
       hurt: bake(SKEL_WALK, PALS.dead, 16, 20),
       dead: bake(SKEL_WALK, PALS.dead, 16, 20)
+    };
+    Art.sprites.creeper = {
+      walk: bake(CREEP_WALK, PALS.creeper, 16, 20),
+      atk: bake(CREEP_ATK, PALS.creeper, 16, 20),
+      hurt: bake(CREEP_WALK, PALS.dead, 16, 20),
+      dead: bake(CREEP_WALK, PALS.dead, 16, 20)
+    };
+    Art.sprites.spider = {
+      walk: bake(SPIDER_WALK, PALS.spider, 16, 20),
+      atk: bake(SPIDER_ATK, PALS.spider, 16, 20),
+      hurt: bake(SPIDER_WALK, PALS.dead, 16, 20),
+      dead: bake(SPIDER_WALK, PALS.dead, 16, 20)
     };
 
     // 玩家（幸存者）：4 种上衣配色，用于区分联机队友
