@@ -65,6 +65,20 @@
     root.classList.remove('hide');
     document.body.classList.add('touch');
 
+    // 竖屏提示：以前这个 #rotate 覆盖层在 DOM 里但没有任何代码会点亮它，
+    // 手机上竖屏打开就是"排版被裁一半且没有任何提示"。
+    const rotateEl = document.getElementById('rotate');
+    const updateRotate = () => {
+      if (!rotateEl) return;
+      const portrait = ROOT.innerWidth < ROOT.innerHeight;
+      rotateEl.style.display = (portrait && T.active) ? 'grid' : 'none';
+      T.portrait = portrait;
+    };
+    T.updateRotate = updateRotate;
+    updateRotate();
+    ROOT.addEventListener('resize', updateRotate);
+    ROOT.addEventListener('orientationchange', updateRotate);
+
     const zoneL = document.getElementById('t-left');
     const zoneR = document.getElementById('t-right');
     const knob = document.getElementById('t-knob');

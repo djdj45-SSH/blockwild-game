@@ -2,8 +2,9 @@
    main.js — Vite 入口：按序装载 PP 命名空间 + Three.js 渲染器
    ============================================================ */
 // 1) 核心与模拟（IIFE 副作用挂到 globalThis.PP）
+//    注意：art.js（旧的 2D 像素贴图生成器）已不被客户端使用，
+//    Three.js 版贴图在 src/three/textures.js。art.js 仅保留给 tools/verify.js 回归。
 import '../core.js';
-import '../art.js';
 import '../audio.js';
 import '../sim/weapons.js';
 import '../sim/roguelike.js';

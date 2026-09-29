@@ -382,7 +382,14 @@
     if (!G) return;
 
     const paused = (mode === 'solo' ? G.state !== 'playing' : !!G.paused);
-    if (paused) return;
+    if (paused) {
+      // 标题页是"活动背景"，继续渲染（天空/雾会动）；暂停/结算页冻结当前帧即可
+      if (G.state === 'title') {
+        PP.Render.frame(G);
+        if (PP.Touch && PP.Touch.enabled) applyTouchLook();
+      }
+      return;
+    }
 
     const inp = buildInput();
     applyTouchLook();
@@ -429,9 +436,10 @@
     if (fpsCount >= 90) {
       const avg = fpsAcc / fpsCount;
       fpsAcc = 0; fpsCount = 0;
-      if (avg > 0.021 && degradeLeft > 0) {
+      // 帧时间 >21ms（<48fps）就逐级降分辨率，最多 3 次，不低于 0.45×
+      if (avg > 0.021 && degradeLeft > 0 && PP.Render.quality > 0.45) {
         degradeLeft--;
-        PP.Render.quality *= 0.82;
+        PP.Render.quality = Math.max(0.45, PP.Render.quality * 0.82);
         PP.Render.resize();
       }
     }
@@ -487,13 +495,13 @@
     const bs1 = document.getElementById('btn-set-title'); if (bs1) bs1.addEventListener('click', openSet);
     const bs2 = document.getElementById('btn-set-pause'); if (bs2) bs2.addEventListener('click', openSet);
 
-    // 画质档位
+    // 画质档位（走 Settings.setQuality，才能"生效 + 存盘 + 按钮高亮"三件事都做）
     const qbtns = document.querySelectorAll('.qbtn');
     for (const b of qbtns) {
       b.addEventListener('click', () => {
-        PP.Render.quality = parseFloat(b.getAttribute('data-q')) || 1;
-        PP.Render.resize();
-        for (const o of qbtns) o.classList.toggle('on', o === b);
+        const q = parseFloat(b.getAttribute('data-q')) || 1;
+        if (PP.Settings && PP.Settings.setQuality) PP.Settings.setQuality(q);
+        else { PP.Render.quality = q; PP.Render.resize(); }
         PP.Hud.toast('画质已切换');
       });
     }

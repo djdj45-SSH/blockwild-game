@@ -123,7 +123,29 @@
     const st = el('set-sens-txt'); if (st) st.textContent = S.data.mouseSens.toFixed(2) + 'x';
     const q = el('set-quality'); if (q) q.value = String(S.data.quality);
     const m = el('set-mute'); if (m) m.checked = !!S.data.muted;
+    syncQualityBtns();
   }
+
+  /** 暂停面板上的 低/中/高/高清/超清 档位按钮与实际画质对齐 */
+  function syncQualityBtns() {
+    if (!ROOT.document) return;
+    const cur = PP.Render.quality;
+    for (const b of ROOT.document.querySelectorAll('.qbtn')) {
+      const q = parseFloat(b.getAttribute('data-q'));
+      b.classList.toggle('on', Math.abs(Math.min(2, q) - cur) < 0.02);
+    }
+  }
+
+  /** 统一画质入口：档位按钮和下拉框都走这里，保证"生效 + 持久化 + UI 同步"三件事都做 */
+  S.setQuality = function (v) {
+    const q = Math.max(0.35, Math.min(2, Number(v) || 1));
+    S.data.quality = q;
+    PP.Render.quality = q;
+    PP.Render.resize();
+    const sel = el('set-quality'); if (sel) sel.value = String(q);
+    S.save();
+    syncQualityBtns();
+  };
 
   S.init = function () {
     root = el('settings');
@@ -151,10 +173,7 @@
     });
     const q = el('set-quality');
     if (q) q.addEventListener('change', () => {
-      S.data.quality = Number(q.value);
-      PP.Render.quality = S.data.quality;
-      PP.Render.resize();
-      S.save();
+      S.setQuality(Number(q.value));
     });
     const ff = el('set-ff');
     if (ff) ff.addEventListener('change', () => {
@@ -198,6 +217,7 @@
     PP.Audio.setVolume(S.data.volume);
     PP.Audio.setMuted(S.data.muted);
     if (PP.G) PP.G.friendlyFire = S.data.friendlyFire;
+    syncQualityBtns();
   }
   S.applyAll = applyAll;
 })();

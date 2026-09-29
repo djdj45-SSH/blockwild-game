@@ -4,6 +4,17 @@
    ============================================================ */
 import * as THREE from 'three';
 
+/* 全局各向异性上限：由渲染器按 GPU 能力写入。
+   掠射角看地面时，mip 选择会把 1m 一格的地面糊成"一片纯色"——
+   各向异性过滤是解决这个的第一手段。 */
+let ANISOTROPY = 8;
+const texRefs = [];
+export function setAnisotropy(max) {
+  ANISOTROPY = Math.max(1, Math.min(16, (max | 0) || 1));
+  for (const t of texRefs) t.anisotropy = ANISOTROPY;
+}
+export function getAnisotropy() { return ANISOTROPY; }
+
 function canvas(size) {
   const c = document.createElement('canvas');
   c.width = c.height = size;
@@ -15,7 +26,8 @@ function tex(c, repeat = 1) {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(repeat, repeat);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
+  t.anisotropy = ANISOTROPY;
+  texRefs.push(t);
   return t;
 }
 
@@ -240,4 +252,70 @@ export function buildAllTextures() {
 
 export function threeTex(canvasEl, repeat = 1) {
   return tex(canvasEl, repeat);
+}
+
+/* ---------------- 纹理图集：整个世界一批材质 ----------------
+   把 12 张 256² 贴图打进一张 1024² 图集，于是「所有方块类型」可以共用
+   同一个材质 → 分块网格可以把整块地形合进 1 个 draw call。
+   相邻格子刻意放相近材质（草/叶、石/砂岩），减少 mip 边缘串色。 */
+export const ATLAS_COLS = 4;
+export const ATLAS_ROWS = 4;
+export const ATLAS_TILE = 256;
+/** 图集内的排布顺序（索引 = 槽位） */
+export const ATLAS_ORDER = [
+  'grass', 'leaves', 'dirt', 'sand',
+  'stone', 'sandstone', 'plank', 'cactus',
+  'brick', 'redstone', 'bedrock', 'metal'
+];
+
+let atlasCache = null;
+export function buildAtlas() {
+  if (atlasCache) return atlasCache;
+  const src = buildAllTextures();
+  const c = document.createElement('canvas');
+  c.width = ATLAS_TILE * ATLAS_COLS;
+  c.height = ATLAS_TILE * ATLAS_ROWS;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const uvOf = {};
+  ATLAS_ORDER.forEach((name, i) => {
+    const col = i % ATLAS_COLS;
+    const row = (i / ATLAS_COLS) | 0;
+    ctx.drawImage(src[name], col * ATLAS_TILE, row * ATLAS_TILE);
+    uvOf[name] = i;
+  });
+  atlasCache = { canvas: c, index: uvOf };
+  return atlasCache;
+}
+
+/** 取某张贴图在图集里的 UV 矩形（含半像素内缩，抗采样串色）
+ *  CanvasTexture 默认 flipY=true → 图集第 0 行映射到 v 的上方 */
+export function atlasUV(name, inset = 1.5) {
+  const A = buildAtlas();
+  const i = A.index[name];
+  if (i === undefined) return [0, 0, 1, 1];
+  const W = ATLAS_TILE * ATLAS_COLS, H = ATLAS_TILE * ATLAS_ROWS;
+  const col = i % ATLAS_COLS, row = (i / ATLAS_COLS) | 0;
+  const u0 = (col * ATLAS_TILE + inset) / W;
+  const u1 = ((col + 1) * ATLAS_TILE - inset) / W;
+  const v1 = 1 - (row * ATLAS_TILE + inset) / H;
+  const v0 = 1 - ((row + 1) * ATLAS_TILE - inset) / H;
+  return [u0, v0, u1, v1];
+}
+
+/** 把图集包成 THREE 纹理（单例） */
+let atlasTexRef = null;
+export function atlasTexture(THREE) {
+  if (atlasTexRef) return atlasTexRef;
+  const A = buildAtlas();
+  const t = new THREE.CanvasTexture(A.canvas);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.anisotropy = ANISOTROPY;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.needsUpdate = true;
+  atlasTexRef = t;
+  texRefs.push(t);
+  return t;
 }

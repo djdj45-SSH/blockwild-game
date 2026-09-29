@@ -86,8 +86,9 @@ export function buildArchitecture(Wd) {
   };
 
   const B = new Batch();
-  const plank = makeTextured('plank', 0xffffff, 1);
-  const stone = makeTextured('stone', 0xffffff, 1);
+  // 色调压一档：之前是纯白，配上直射光后描边过曝（白边发光）
+  const plank = makeTextured('plank', 0xe6d2a8, 1);
+  const stone = makeTextured('stone', 0xbfc0b8, 1);
   const dark = makeMat(0x1a1c18, { roughness: 0.95 });
   const glass = makeMat(0x2a3230, {
     roughness: 0.35, metalness: 0.15,

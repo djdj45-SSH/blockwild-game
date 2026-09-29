@@ -8,6 +8,32 @@
 <title>方块荒野 程序生成开放世界 · 写实画风 · 局域网联机</title>
 <link rel="stylesheet" href="css/style.css" />
   <link rel="icon" href="data:," />
+  <!-- 裸模块解析：打包版（dist/）不需要它；纯静态托管（如 GitHub Pages）直接打开
+       源码版 index.html 时，浏览器靠这张 importmap 把 'three' 指到 CDN，
+       否则 "import * as THREE from 'three'" 直接解析失败、整个游戏起不来。
+       Vite 构建/开发时走自己的解析器，这张表不影响。 -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.184.0/build/three.module.js"
+      }
+    }
+  </script>
+  <script>
+    // 启动失败兜底：CDN 拿不到 / 浏览器不支持模块时给出人话提示，而不是黑屏
+    window.addEventListener('error', function (e) {
+      var el = document.getElementById('boot-fail');
+      if (!el || window.PP) return;
+      el.style.display = 'grid';
+      var pre = el.querySelector('pre');
+      if (pre) pre.textContent = String((e && (e.message || e.error)) || '未知错误');
+    }, true);
+    setTimeout(function () {
+      var el = document.getElementById('boot-fail');
+      if (!el || window.PP) return;
+      if (!(window.PP && window.PP.Game)) el.style.display = 'grid';
+    }, 8000);
+  </script>
 </head>
 <body>
 <div id="stage">
@@ -276,5 +302,19 @@
 </div>
 
 <script type="module" src="src/client/main.js"></script>
+
+<div id="boot-fail">
+  <div class="bootbox">
+    <h2>启动失败</h2>
+    <p>3D 引擎没能加载。常见原因：</p>
+    <ul>
+      <li>网络拿不到 <code>unpkg.com</code>（离线 / 被拦截）—— 试着直接用打包版 <code>dist/</code></li>
+      <li>浏览器太旧，不支持 ES 模块 / WebGL2</li>
+      <li>用 <code>file://</code> 直接打开了页面（需要 http 服务）</li>
+    </ul>
+    <pre></pre>
+    <p class="tip">推荐：<code>npm run build &amp;&amp; npm run server</code> 后访问 http://localhost:8080</p>
+  </div>
+</div>
 </body>
 </html>

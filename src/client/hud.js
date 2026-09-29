@@ -222,12 +222,16 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => D.toast.classList.remove('show'), 1600);
   };
-  Hud.banner = function (text) {
-    if (!D) return;
+  let bannerTimer = 0;
+  Hud.banner = function (text, dur) {
+    if (!D || !D.banner) return;
     D.banner.textContent = text;
     D.banner.classList.remove('show');
     void D.banner.offsetWidth;
     D.banner.classList.add('show');
+    // 必须自动消失：这行横幅以前会永久挂在屏幕正中挡住视野
+    clearTimeout(bannerTimer);
+    bannerTimer = setTimeout(() => D.banner.classList.remove('show'), dur || 3400);
   };
   Hud.netStatus = function (text, cls) {
     if (!D || !D.net) return;

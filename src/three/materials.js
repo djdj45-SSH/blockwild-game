@@ -2,7 +2,27 @@
    materials.js — 写实 PBR + 程序化纹理
    ============================================================ */
 import * as THREE from 'three';
-import { buildAllTextures, threeTex } from './textures.js';
+import { buildAllTextures, threeTex, atlasTexture, atlasUV, setAnisotropy, ATLAS_ORDER } from './textures.js';
+
+export { atlasUV, setAnisotropy, ATLAS_ORDER };
+
+/* ---------------- 图集材质：整个地形共用一份 ----------------
+   所有方块类型都从同一张 1024² 图集采样，所以分块网格可以把
+   "整块地形的墙 + 地面"压成极少的 draw call。 */
+let atlasMat = null;
+export function atlasMaterial() {
+  if (atlasMat) return atlasMat;
+  atlasMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    map: atlasTexture(THREE),
+    vertexColors: true,
+    roughness: 0.94,
+    metalness: 0.0,
+    side: THREE.FrontSide
+  });
+  atlasMat.name = 'terrain';
+  return atlasMat;
+}
 
 let texCache = null;
 function T() {
@@ -69,27 +89,29 @@ export function makeTextured(kind, hex = 0xffffff, repeat = 1, opts = {}) {
   });
 }
 
-/** 墙类型 → 纹理名 + 色调 */
+/** 墙类型 → 纹理名 + 色调
+ *  注意：贴图本身已经带基色了，这里的 color 只做"轻微偏色"，
+ *  给成 0xffffff 表示不染色。以前这里给的是深色，会把贴图二次压暗。 */
 export const WALL_SKIN = {
-  1: { map: 'stone', color: 0xe8e8e0 },
-  2: { map: 'plank', color: 0xf0e0c8 },
-  3: { map: 'brick', color: 0xf0d8d0 },
-  4: { map: 'sandstone', color: 0xf8f0e0 },
-  5: { map: 'plank', color: 0xd8c0a0 }, // log
-  6: { map: 'leaves', color: 0xd0e8c0 },
-  7: { map: 'cactus', color: 0xd0e8c8 },
-  8: { map: 'redstone', color: 0xf0d0c8 },
-  9: { map: 'bedrock', color: 0x606068 }
+  1: { map: 'stone', color: 0xffffff },
+  2: { map: 'plank', color: 0xfff0dc },
+  3: { map: 'brick', color: 0xffe8e0 },
+  4: { map: 'sandstone', color: 0xfff8ec },
+  5: { map: 'plank', color: 0xe8d0b0 }, // log
+  6: { map: 'leaves', color: 0xe4f4d4 },
+  7: { map: 'cactus', color: 0xe4f4dc },
+  8: { map: 'redstone', color: 0xffe4dc },
+  9: { map: 'bedrock', color: 0xa8a8b0 }
 };
 
 export const FLOOR_SKIN = {
-  0: { map: 'grass', color: 0xd8e8c0 },
-  1: { map: 'dirt', color: 0xe8d0b8 },
-  2: { map: 'sand', color: 0xf8f0d8 },
-  3: { map: 'stone', color: 0xe0e0d8 },
-  4: { map: 'plank', color: 0xf0e0c0 },
-  5: { map: 'stone', color: 0x5088b0 }, // water-ish
-  6: { map: 'stone', color: 0xe8f0f8 }
+  0: { map: 'grass', color: 0xeaf6d8 },
+  1: { map: 'dirt', color: 0xf4e4d0 },
+  2: { map: 'sand', color: 0xfff8e4 },
+  3: { map: 'stone', color: 0xffffff },
+  4: { map: 'plank', color: 0xfff0d4 },
+  5: { map: 'stone', color: 0x74a8d0 }, // water-ish
+  6: { map: 'stone', color: 0xf4f8ff }
 };
 
 /** 兼容旧调色 */
