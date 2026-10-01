@@ -52,6 +52,11 @@ import { buildArchitecture } from '../three/architecture.js';
   R.ssaa = 1;
   R.taa = false;
   R.fxaa = false;
+  // 太阳相对相机的偏移（每帧 sun.position = 相机 + 该偏移），仰角 ≈ 36°。
+  // 压低到 36° 是为了让影子够长（影长 ≈ 1.4×物高）—— 43° 时影子缩在方块脚下，
+  // 整个画面看起来没有明暗关系。暴露出来是为了让取景脚本能换角度验证阴影；
+  // 以后做昼夜循环也从这里走。
+  R.sunOffset = new THREE.Vector3(30, 26, 20);
 
   /* ---------------- 初始化 ---------------- */
   R.init = function (cvs) {
@@ -66,7 +71,11 @@ import { buildArchitecture } from '../three/architecture.js';
     renderer.setPixelRatio(1);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.shadowMap.autoUpdate = false;      // 手动节流：地形是静态的，太阳跟着走
+    // 手动节流：地形是静态的、太阳只是平移，隔帧重算够用，省一半阴影通道开销。
+    // ⚠️ 注意：SwiftShader 软件 GL 下 draw call 会涨上去（阴影通道确实在渲染）
+    // 但屏幕上不出现影子 —— 是软件渲染器不支持深度比较采样，不是配置问题，
+    // 真机 GPU 上是正常的。别因为这个把阴影配置改坏。
+    renderer.shadowMap.autoUpdate = false;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.LinearToneMapping;
     // 曝光：贴图基色在线性空间偏暗，需要提亮；但不能过头——
@@ -88,18 +97,22 @@ import { buildArchitecture } from '../three/architecture.js';
     camera = new THREE.PerspectiveCamera(FOV, 1, NEAR, FAR);
     camera.rotation.order = 'YXZ';
 
-    // 光照配比（明亮卡通）：高环境光 + 中等太阳，阴影侧不糊成黑块。
-    // 目标：受光面 ≈ 反照率×1.05，背光面 ≈ 反照率×0.5
+    // 光照配比（明亮卡通）：太阳主导 + 克制的环境光。
+    // ⚠️ 环境光/半球光加太多会"把画面照平"——曾经的 0.46+0.45 让受光面与
+    // 背光面只差 ~1.4 倍，整幅画面像贴了层塑料膜，方块完全没有体积感。
+    // 当前配比：受光面 ≈ 反照率×1.9，侧面 ×1.4，背光面 ×0.6（明暗拉开 3 倍）。
     // 注意环境光的色偏：给蓝会让整个世界的中性灰（石头/石砖）泛蓝，
     // 石砖地面会变成"蓝灰色地板"——环境光要接近中性。
-    ambient = new THREE.AmbientLight(0xe6eef6, 0.46);
+    ambient = new THREE.AmbientLight(0xe6eef6, 0.30);
     scene.add(ambient);
 
-    hemi = new THREE.HemisphereLight(0xdff0ff, 0x9cc46a, 0.45);
+    hemi = new THREE.HemisphereLight(0xdff0ff, 0x9cc46a, 0.34);
     scene.add(hemi);
 
-    sun = new THREE.DirectionalLight(0xfff6e2, 1.35);
-    sun.position.set(36, 48, 18);
+    sun = new THREE.DirectionalLight(0xfff6e2, 1.55);
+    // 太阳压低到 ~36°：影子被拉长到 1.4 倍物高，方块之间才有"体积感"。
+    // 高角度（54°）时影子缩在方块脚下，画面看起来同样是一片平。
+    sun.position.copy(R.sunOffset);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.near = 1;
@@ -109,8 +122,11 @@ import { buildArchitecture } from '../three/architecture.js';
     sun.shadow.camera.right = sc;
     sun.shadow.camera.top = sc;
     sun.shadow.camera.bottom = -sc;
-    sun.shadow.bias = -0.0009;
-    sun.shadow.normalBias = 0.05;
+    sun.shadow.bias = -0.0005;
+    // ⚠️ normalBias 不能再往下调：0.028 时大平面（地面）会大面积自遮挡
+    // （shadow acne）→ 整个地面像蒙了层灰，比"影子略微偏移"难看得多。
+    // 0.04 是本调的平衡点。
+    sun.shadow.normalBias = 0.04;
     // 关键：改过 left/right/top/bottom 之后必须手动重算投影矩阵，
     // 否则阴影相机还是构造时的 ±5 默认框 → 稍远一点就完全没有影子（已踩过）
     sun.shadow.camera.updateProjectionMatrix();
@@ -162,9 +178,9 @@ import { buildArchitecture } from '../three/architecture.js';
     const ctx = c.getContext('2d');
     const g = ctx.createLinearGradient(0, 0, 0, h);
     // 与天空 shader 同一套配色：IBL 的色调直接决定金属/高光件的观感
-    g.addColorStop(0, '#3f8fe0');
-    g.addColorStop(0.42, '#a8d8f5');
-    g.addColorStop(0.5, '#daeffc');
+    g.addColorStop(0, '#5ea4ea');
+    g.addColorStop(0.42, '#b4dcf8');
+    g.addColorStop(0.5, '#e2f1fd');
     g.addColorStop(0.58, '#a8c878');
     g.addColorStop(1, '#7a9c58');
     ctx.fillStyle = g;
@@ -199,56 +215,83 @@ import { buildArchitecture } from '../three/architecture.js';
       depthTest: false,
       fog: false,
       uniforms: {
-        // 明亮卡通天光：天顶饱和蓝 → 中段亮蓝 → 地平线近乎白的浅蓝。
+        // 明亮卡通天光：天顶蓝 → 中段亮蓝 → 地平线近乎白的浅蓝。
         // 千万别用灰（灰 = 阴天，整幅画面立刻发闷，这是美术统一前的实际观感）
-        top: { value: new THREE.Color(0x62a8ee) },
-        mid: { value: new THREE.Color(0x96cbf6) },
-        bottom: { value: new THREE.Color(0xd8eefc) },
+        top: { value: new THREE.Color(0x5ea4ea) },
+        mid: { value: new THREE.Color(0x9dd0f8) },
+        bottom: { value: new THREE.Color(0xe6f4fe) },
         sunDir: { value: new THREE.Vector3(0.55, 0.62, 0.42).normalize() },
+        camXZ: { value: new THREE.Vector2(0, 0) },
         time: { value: 0 }
       },
       vertexShader: `
         varying vec3 vDir;
         void main() {
-          vDir = normalize(position);
+          vDir = normal;                       // 球体法线就是方向，比 normalize(position) 更准
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
       fragmentShader: `
         uniform vec3 top; uniform vec3 mid; uniform vec3 bottom;
-        uniform vec3 sunDir; uniform float time;
+        uniform vec3 sunDir; uniform vec2 camXZ; uniform float time;
         varying vec3 vDir;
 
         float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
 
+        /* 云参数：云层高度与格子边长都用"天空球半径"为单位。
+           CLOUD_H=0.60 / CLOUD_CELL=0.085 是本调的甜点：
+           天顶一块云约占垂直视野 1/9，横排 8~9 块，接近 Minecraft 观感。 */
+        const float CLOUD_H = 0.60;
+        const float CLOUD_CELL = 0.085;
+
         void main() {
           vec3 d = normalize(vDir);
           float h = clamp(d.y, -1.0, 1.0) * 0.5 + 0.5;
-          vec3 col = mix(bottom, mid, smoothstep(0.44, 0.57, h));
-          col = mix(col, top, smoothstep(0.55, 0.95, h));
+          vec3 col = mix(bottom, mid, smoothstep(0.42, 0.56, h));
+          col = mix(col, top, smoothstep(0.54, 0.96, h));
 
-          /* Minecraft 式方块云：把视线方向投影到天顶平面，再量化成格子，
-             整格统一取一个哈希值 → 云是"硬边像素块"而不是软绵绵的噪声云。 */
-          if (d.y > 0.02) {
-            vec2 cuv = d.xz / max(d.y, 0.14) * 1.6;
-            cuv.x += time * 0.0008;                 // 缓慢飘移
+          /* Minecraft 式方块云。
+             ⚠️ 必须用"射线与云平面求交"的坐标，不能直接把 d.xz/d.y 当 uv ——
+             那样算出来整个天空只覆盖 ±1.6 个格子，一块云占半屏，
+             天空会变成插着几块巨大白多边形板（已踩过，观感极差）。 */
+          if (d.y > 0.015) {
+            float t = CLOUD_H / d.y;                        // 交点到相机的距离（球半径）
+            vec2 p = d.xz * t + camXZ * 0.01136;            // 1/88：相机位移换算成球面坐标，云才有视差
+            vec2 cuv = p / CLOUD_CELL + vec2(time * 0.020, time * 0.008);  // 缓慢飘移
+
             vec2 q = floor(cuv);
-            // 邻域投票：让云团成片，而不是孤立小方块
-            float n = hash(q) * 0.50
-                    + hash(q + vec2( 1.0, 0.0)) * 0.15
-                    + hash(q + vec2(-1.0, 0.0)) * 0.15
-                    + hash(q + vec2( 0.0, 1.0)) * 0.10
-                    + hash(q + vec2( 0.0,-1.0)) * 0.10;
-            float cloud = step(0.62, n);
-            // 地平线附近与极远处淡出，避免云糊满视野边缘
-            float fade = smoothstep(0.03, 0.26, d.y) * (1.0 - smoothstep(7.0, 15.0, length(cuv)));
-            col = mix(col, vec3(1.0), cloud * fade * 0.9);
+            // 邻域投票：让云团成片。孤立小方块看起来是屏幕噪点，不是云；
+            // 但阈值不能给低 —— 覆盖率高过 ~25% 就会糊成"白蓝棋盘格"，
+            // Minecraft 的云是稀疏的大片，蓝天要占大头。
+            float n = hash(q) * 0.30
+                    + hash(q + vec2( 1.0, 0.0)) * 0.14
+                    + hash(q + vec2(-1.0, 0.0)) * 0.14
+                    + hash(q + vec2( 0.0, 1.0)) * 0.14
+                    + hash(q + vec2( 0.0,-1.0)) * 0.14
+                    + hash(q + vec2( 1.0, 1.0)) * 0.07
+                    + hash(q + vec2(-1.0,-1.0)) * 0.07;
+            float cloud = step(0.615, n);
+            // 密度决定明暗：云团中心纯白，边缘偏冷灰 → 有体块感而不是一张白纸
+            float dens = smoothstep(0.615, 0.90, n);
+            vec3 cloudCol = mix(vec3(0.85, 0.90, 0.97), vec3(1.0), dens);
+
+            // d.y 趋 0 时格子被透视压得极密，必须淡出，否则地平线糊成噪点带。
+            // 淡出区间给宽一点：云要"悬在天上"，不能一直压到地平线上。
+            float distFade = 1.0 - smoothstep(14.0, 40.0, length(cuv));
+            float fade = smoothstep(0.02, 0.16, d.y) * distFade;
+            col = mix(col, cloudCol, cloud * fade * 0.94);
           }
 
-          // 太阳：小而亮的核心 + 一圈柔和光晕
+          // 太阳：Minecraft 的太阳是"方块"不是圆盘 —— 这是最强的风格符号之一。
+          // 在垂直于 sunDir 的平面上量角度，两个轴上同时 step 出正方形。
           float sd = max(dot(d, sunDir), 0.0);
-          col += vec3(1.0, 0.97, 0.88) * pow(sd, 120.0) * 1.0;
-          col += vec3(1.0, 0.94, 0.78) * pow(sd, 8.0) * 0.12;
+          vec3 su = normalize(cross(sunDir, vec3(0.0, 1.0, 0.0)));   // 水平基向量
+          vec3 sv = normalize(cross(su, sunDir));                     // 垂直基向量
+          float ax = abs(dot(d, su)), ay = abs(dot(d, sv));
+          float sunMask = step(ax, 0.030) * step(ay, 0.030) * step(0.0, sd);
+          col += vec3(1.0, 0.98, 0.92) * sunMask * 1.15;
+          // 一圈柔和光晕（让太阳"发光"，不是贴上去的一个白方块）
+          col += vec3(1.0, 0.95, 0.80) * pow(sd, 10.0) * 0.14;
 
           gl_FragColor = vec4(col, 1.0);
         }
@@ -307,22 +350,58 @@ import { buildArchitecture } from '../three/architecture.js';
     return 1.5;
   }
 
-  function pushQuad(P, N, U, C, c0, c1, c2, c3, n, uv, tint) {
+  /* rot：纹理绕面中心旋转 90°×rot（只用 4 个整数角度，不产生镜像）。
+     ao ：[c0,c1,c2,c3] 四角亮度倍数，不传 = 全 1。
+     这两个是"画面发平"的解药：UV 旋转打散大面积重复感（Minecraft 的草顶
+     也是靠 UV 变体），顶点 AO 制造方块互相遮挡的体积感（smooth lighting）。 */
+  function pushQuad(P, N, U, C, c0, c1, c2, c3, n, uv, tint, rot, ao) {
     const seq = [c0, c1, c2, c0, c2, c3];
-    const uvs = [uv[0], uv[1], uv[2], uv[1], uv[2], uv[3], uv[0], uv[1], uv[2], uv[3], uv[0], uv[3]];
+    const u0 = uv[0], v0 = uv[1], u1 = uv[2], v1 = uv[3];
+    let uvs;
+    if (rot) {
+      // 角序：c0=(u0,v0) c1=(u1,v0) c2=(u1,v1) c3=(u0,v1)
+      const cu = [u0, u1, u1, u0], cv = [v0, v0, v1, v1];
+      const r0 = rot & 3, r1 = (r0 + 1) & 3, r2 = (r0 + 2) & 3, r3 = (r0 + 3) & 3;
+      uvs = [
+        cu[r0], cv[r0], cu[r1], cv[r1], cu[r2], cv[r2],
+        cu[r0], cv[r0], cu[r2], cv[r2], cu[r3], cv[r3]
+      ];
+    } else {
+      uvs = [u0, v0, u1, v0, u1, v1, u0, v0, u1, v1, u0, v1];
+    }
     const tr = tint[0], tg = tint[1], tb = tint[2];
+    const aoSeq = ao ? [ao[0], ao[1], ao[2], ao[0], ao[2], ao[3]] : null;
     for (let i = 0; i < 6; i++) {
       const v = seq[i];
+      const m = aoSeq ? aoSeq[i] : 1;
       P.push(v[0], v[1], v[2]);
       N.push(n[0], n[1], n[2]);
       U.push(uvs[i * 2], uvs[i * 2 + 1]);
-      C.push(tr, tg, tb);
+      C.push(tr * m, tg * m, tb * m);
     }
   }
 
   /* 皮肤色调（sRGB hex）→ 线性 RGB，用于顶点色调制。
      没有这一步，沙地/水面/原木等会全部变成同一种石头灰。
      返回值是复用数组（pushQuad 立即拷走），避免逐格产生垃圾。 */
+  /* 双线性插值的 value noise（CPU 端）。
+     直接用 hash(floor(x)) 做地面色差会让色块边界是直角，俯视就是一张棋盘；
+     Minecraft 的草地色差是 biome color 渐变 —— 必须插值。 */
+  function vhash(a, b, seed) {
+    let n = Math.imul(a, 374761393) + Math.imul(b, 668265263) + Math.imul(seed, 1274126177);
+    n = n ^ (n >>> 13);
+    n = Math.imul(n, 1274126177);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+  }
+  function vnoise(x, z, seed) {
+    const xi = Math.floor(x), zi = Math.floor(z);
+    const xf = x - xi, zf = z - zi;
+    const sx = xf * xf * (3 - 2 * xf), sz = zf * zf * (3 - 2 * zf);
+    const n00 = vhash(xi, zi, seed), n10 = vhash(xi + 1, zi, seed);
+    const n01 = vhash(xi, zi + 1, seed), n11 = vhash(xi + 1, zi + 1, seed);
+    return (n00 * (1 - sx) + n10 * sx) * (1 - sz) + (n01 * (1 - sx) + n11 * sx) * sz;
+  }
+
   const tintCache = new Map();
   const tintTmp = new THREE.Color();
   function tintOf(hex, k) {
@@ -337,36 +416,47 @@ import { buildArchitecture } from '../three/architecture.js';
     return t;
   }
 
-  /** 顶面（+Y）：u 沿 +z，v 沿 +x */
-  function pushTop(P, N, U, C, x0, y, z0, x1, z1, uv, tint) {
+  /** 顶面（+Y）：u 沿 +z，v 沿 +x。rot = UV 旋转档位（0..3），ao = 四角亮度 */
+  function pushTop(P, N, U, C, x0, y, z0, x1, z1, uv, tint, rot, ao) {
     pushQuad(P, N, U, C,
       [x0, y, z0], [x0, y, z1], [x1, y, z1], [x1, y, z0],
-      [0, 1, 0], uv, tint);
+      [0, 1, 0], uv, tint, rot, ao);
   }
 
-  /** 侧立面：按 rows 段纵向平铺（墙高 >1 格时纹理不会被拉长） */
+  /** 侧立面：按固定 1 米分段纵向平铺。
+      ⚠️ 不能用 h/round(h) 等分：墙高表是 2.0/1.9/2.2/2.85/2.45 这类非整数，
+      等分后每段高度 = h/round(h)，纹理会被非均匀拉伸（h=2.45 → 拉长 22%，
+      树叶侧面直接变成"横条纹"）。改成每段 1 米、顶段吃余数，
+      这样除顶段外纹理都是 1:1。 */
   function pushSide(P, N, U, C, axis, x0, z0, x1, z1, y0, y1, uv, tint) {
     const h = y1 - y0;
-    const rows = Math.max(1, Math.round(h / 1.0));
-    const rh = h / rows;
+    const rows = Math.max(1, Math.ceil(h - 0.001));
+    // 墙脚接触阴影：最下面一段的底部两个顶点压暗。
+    // Minecraft 的 smooth lighting 就是这么做的 —— 少了它，所有墙都像"浮在草地上"。
+    // 顶点顺序里前两个是底（a 高度），后两个是顶（b 高度）。
+    // ⚠️ 顶点色是**线性空间**的：0.70 这种值经过 sRGB 编码后屏幕上只暗 13%，
+    // 根本看不出来。要"视觉上暗 30%、40%"，线性因子得给到 0.45 / 0.30 ——
+    // 换算关系 k_linear ≈ ratio^2.4。这是 AO 一直没效果的真凶。
+    const aoBottom = [0.46, 0.46, 1, 1];
     for (let r = 0; r < rows; r++) {
-      const a = y0 + r * rh, b = a + rh;
+      const a = y0 + r, b = Math.min(y1, a + 1);
+      const ao = (r === 0) ? aoBottom : null;
       if (axis === '+x') {
         pushQuad(P, N, U, C,
           [x1, a, z1], [x1, a, z0], [x1, b, z0], [x1, b, z1],
-          [1, 0, 0], uv, tint);
+          [1, 0, 0], uv, tint, 0, ao);
       } else if (axis === '-x') {
         pushQuad(P, N, U, C,
           [x0, a, z0], [x0, a, z1], [x0, b, z1], [x0, b, z0],
-          [-1, 0, 0], uv, tint);
+          [-1, 0, 0], uv, tint, 0, ao);
       } else if (axis === '+z') {
         pushQuad(P, N, U, C,
           [x0, a, z1], [x1, a, z1], [x1, b, z1], [x0, b, z1],
-          [0, 0, 1], uv, tint);
+          [0, 0, 1], uv, tint, 0, ao);
       } else {
         pushQuad(P, N, U, C,
           [x1, a, z0], [x0, a, z0], [x0, b, z0], [x1, b, z0],
-          [0, 0, -1], uv, tint);
+          [0, 0, -1], uv, tint, 0, ao);
       }
     }
   }
@@ -420,22 +510,44 @@ import { buildArchitecture } from '../three/architecture.js';
               const nX = solidAt(x + 1, z), pX = solidAt(x - 1, z);
               const nZ = solidAt(x, z + 1), pZ = solidAt(x, z - 1);
               const buried = nX && pX && nZ && pZ;
+              // 各面明度差同样要按线性空间给：视觉差 1.06 / 0.94 / 1.0 / 0.87
               if (!buried) {
-                pushTop(wP, wN, wU, wC, x, h, z, x + 1, z + 1, uv, tintOf(skin.color, 1.08));
+                const wh = ((x * 73856093) ^ (z * 19349663)) & 255;
+                pushTop(wP, wN, wU, wC, x, h, z, x + 1, z + 1, uv,
+                  tintOf(skin.color, 1.18 + (wh / 255) * 0.16), wh & 3);
               }
-              if (!nX) pushSide(wP, wN, wU, wC, '+x', x, z, x + 1, z + 1, 0, h, uv, tintOf(skin.color, 1.0));
-              if (!pX) pushSide(wP, wN, wU, wC, '-x', x, z, x + 1, z + 1, 0, h, uv, tintOf(skin.color, 0.93));
-              if (!nZ) pushSide(wP, wN, wU, wC, '+z', x, z, x + 1, z + 1, 0, h, uv, tintOf(skin.color, 0.97));
-              if (!pZ) pushSide(wP, wN, wU, wC, '-z', x, z, x + 1, z + 1, 0, h, uv, tintOf(skin.color, 0.86));
+              if (!nX) pushSide(wP, wN, wU, wC, '+x', x, z, x + 1, z + 1, 0, h, uv, tintOf(skin.color, 1.10));
+              if (!pX) pushSide(wP, wN, wU, wC, '-x', x, z, x + 1, z + 1, 0, h, uv, tintOf(skin.color, 0.86));
+              if (!nZ) pushSide(wP, wN, wU, wC, '+z', x, z, x + 1, z + 1, 0, h, uv, tintOf(skin.color, 1.00));
+              if (!pZ) pushSide(wP, wN, wU, wC, '-z', x, z, x + 1, z + 1, 0, h, uv, tintOf(skin.color, 0.72));
               // 墙体占格 → 该格地面被压住，不生成（省 ~15% 地面三角形）
               continue;
             }
             const ty = floor ? (floor[i] || 0) : 0;
             const fskin = FLOOR_SKIN[ty] || FLOOR_SKIN[0];
             const fuv = atlasUV(fskin.map || 'grass');
-            // 棋盘微差，避免大片纯色
-            const hv = ((x * 73856093) ^ (z * 19349663)) & 255;
-            pushTop(fP, fN, fU, fC, x, 0, z, x + 1, z + 1, fuv, tintOf(fskin.color, 0.95 + (hv / 255) * 0.10));
+            // 三层色差：两个不同尺度的平滑噪声给"成片的深浅"，逐格高频给细节。
+            // ⚠️ 顶点色在线性空间，±6% 到屏幕上只剩 ±2.5%，草地会像一整块纯色；
+            // 要看出层次，线性振幅得给到 ±14% 左右（k_linear ≈ ratio^2.4）。
+            const n1 = vnoise(x * 0.13, z * 0.13, 7);
+            const n2 = vnoise(x * 0.34, z * 0.31, 23);
+            const hi = (((x >> 1) * 73856093) ^ ((z >> 1) * 19349663)) & 255;
+            const fk = 0.875 + n1 * 0.10 + n2 * 0.075 + (hi / 255) * 0.055;
+
+            // 顶点级 AO（Minecraft 的 smooth lighting）：贴墙/贴树的那个角压暗。
+            // 整格统一压暗是没用的 —— 必须按角算，墙体根部才会出现"建筑落在地上"
+            // 的接触阴影。地面占画面一半，这是"画面发平"最直接的解药。
+            const sN = solidAt(x, z - 1) ? 1 : 0, sS = solidAt(x, z + 1) ? 1 : 0;
+            const sW = solidAt(x - 1, z) ? 1 : 0, sE = solidAt(x + 1, z) ? 1 : 0;
+            const a0 = 1 - 0.30 * (sN + sW) - 0.15 * (solidAt(x - 1, z - 1) ? 1 : 0);
+            const a1 = 1 - 0.30 * (sW + sS) - 0.15 * (solidAt(x - 1, z + 1) ? 1 : 0);
+            const a2 = 1 - 0.30 * (sE + sS) - 0.15 * (solidAt(x + 1, z + 1) ? 1 : 0);
+            const a3 = 1 - 0.30 * (sN + sE) - 0.15 * (solidAt(x + 1, z - 1) ? 1 : 0);
+
+            // UV 旋转档位逐格变化（不要复用 hi：hi 是按 2×2 分块的，
+            // 那样会有 2×2 格的方块贴图方向完全一致，仍能看出规律）
+            pushTop(fP, fN, fU, fC, x, 0, z, x + 1, z + 1, fuv,
+              tintOf(fskin.color, fk), (x * 7 + z * 13) & 3, [a0, a1, a2, a3]);
           }
         }
 
@@ -522,7 +634,7 @@ import { buildArchitecture } from '../three/architecture.js';
   let weaponMesh = null;
   let weaponKind = '';
   // 武器视模缩放：枪口火焰挂在未缩放的 weaponRoot 上，换算时必须共用这个常量
-  const WEAPON_SCALE = 0.72;
+  const WEAPON_SCALE = 0.70;
   let camShake = 0;
   let muzzleFlash = null;
   const muzzleDir = new THREE.Vector3();
@@ -666,11 +778,17 @@ import { buildArchitecture } from '../three/architecture.js';
     camera.rotation.z = camShake * 0.2;
 
     // 光照跟随（阴影贴图只覆盖 ±30，必须跟着玩家走）
-    sun.position.set(camX + 24, 40, camZ + 16);
+    // 偏移默认 (30,34,20) ≈ 43° 仰角，与 init 里的 sun.position 同向
+    sun.position.set(camX + R.sunOffset.x, R.sunOffset.y, camZ + R.sunOffset.z);
     sun.target.position.set(camX, 0, camZ);
     sun.target.updateMatrixWorld();
     if (skyMesh) skyMesh.position.copy(camera.position);
-    if (skyMat) skyMat.uniforms.time.value = performance.now() * 0.001;
+    if (skyMat) {
+      const su = skyMat.uniforms;
+      su.time.value = performance.now() * 0.001;
+      // 云要有视差：把相机水平位移喂给 shader，否则云像贴在天花板上的贴纸
+      su.camXZ.value.set(camera.position.x, camera.position.z);
+    }
 
     cullChunks(camX, camZ);
 
@@ -776,22 +894,23 @@ import { buildArchitecture } from '../three/architecture.js';
       const bobY = (G.weaponBobY || 0) * 0.0016;
       const raise = (G.weaponRaise || 0) * 0.008;
       // 视模防穿墙：沿视线探测到墙则拉近枪
-      let weaponZ = -0.52;
+      let weaponZ = -0.55;
       if (PP.World && PP.World.rayWall) {
         const dx = Math.cos(yaw) * Math.cos(pitch);
         const dy = Math.sin(yaw) * Math.cos(pitch);
         const wallD = PP.World.rayWall(camObj.x, camObj.y, dx, dy, 1.1);
         if (wallD < 0.7) {
           const k = Math.max(0.15, (wallD - 0.16) / 0.54);
-          weaponZ = -0.20 - 0.32 * k;
+          weaponZ = -0.22 - 0.33 * k;
         }
       }
-      // 推远一点（-0.52）能明显减少近平面透视畸变：贴太近时枪会被拉成
+      // 推远一点（-0.55）能明显减少近平面透视畸变：贴太近时枪会被拉成
       // 一坨方块，结构全糊在一起，读不出枪形。
-      // rotation.y 给到 0.40（≈23°）：第一人称是"从正后方看枪的横截面"，
+      // rotation.y 给到 0.38（≈22°）：第一人称是"从正后方看枪的横截面"，
       // 不外偏就只能看到几层方块叠起来，完全没有枪的纵深感。
-      weaponRoot.position.set(0.225 + swayX, -0.185 + bobY + raise, weaponZ);
-      weaponRoot.rotation.set(-0.04 + (G.kickPitch || 0) * 0.4, 0.40, 0.045);
+      // y 抬到 -0.16：加了方块手之后视觉重心会下坠，抬一点才不会"整只手沉在屏幕外"。
+      weaponRoot.position.set(0.200 + swayX, -0.160 + bobY + raise, weaponZ);
+      weaponRoot.rotation.set(-0.04 + (G.kickPitch || 0) * 0.4, 0.42, 0.045);
       if (G.muzzleT > 0) {
         const k = Math.min(1, G.muzzleT / 0.06);
         muzzleLight.intensity = 4.5 * k;
