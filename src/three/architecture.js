@@ -2,7 +2,7 @@
    architecture.js — 写实建筑构件（合并网格，按材质批绘）
    ============================================================ */
 import * as THREE from 'three';
-import { makeTextured, makeMat, makeMetal } from './materials.js';
+import { makeTextured, makeMat } from './materials.js';
 
 /** 累积盒体，最后按材质 merge */
 class Batch {
@@ -86,15 +86,18 @@ export function buildArchitecture(Wd) {
   };
 
   const B = new Batch();
-  // 色调压一档：之前是纯白，配上直射光后描边过曝（白边发光）
-  const plank = makeTextured('plank', 0xe6d2a8, 1);
-  const stone = makeTextured('stone', 0xbfc0b8, 1);
-  const dark = makeMat(0x1a1c18, { roughness: 0.95 });
-  const glass = makeMat(0x2a3230, {
-    roughness: 0.35, metalness: 0.15,
-    transparent: true, opacity: 0.35
+  // 贴图本身已带最终色，这里给接近白，避免顶点色与贴图相乘把构件压暗。
+  // （曾经给 0xe6d2a8/0xbfc0b8 是为了压旧的过亮贴图，新像素贴图明度已经合适）
+  const plank = makeTextured('plank', 0xf8f0e4, 1);
+  const stone = makeTextured('stone', 0xf4f4f4, 1);
+  // 营地火炉：深棕而不是纯黑（明亮场景里纯黑会变成突兀黑洞）
+  const dark = makeMat(0x4a4238, { roughness: 0.95 });
+  // 窗玻璃：明亮反光的浅蓝，青灰会显得像"堵死的洞"
+  const glass = makeMat(0xa8d4ec, {
+    roughness: 0.25, metalness: 0.05,
+    transparent: true, opacity: 0.55
   });
-  const iron = makeMetal(0x6a7078);
+  const iron = makeMat(0xb8bec8, { roughness: 0.5, metalness: 0.25 });
 
   // 建筑墙：压顶 + 少量窗 + 墙基
   for (let y = 1; y < SIZE - 1; y++) {
@@ -174,7 +177,7 @@ export function buildArchitecture(Wd) {
     }
     if (poi.type === 'camp') {
       B.add(dark, 0.85, 0.22, 0.85, poi.x, 0.11, poi.y + 2.2);
-      B.add(makeMat(0x6a2818, { emissive: 0xa03018, emissiveIntensity: 0.45 }),
+      B.add(makeMat(0x8a3a20, { emissive: 0xff7030, emissiveIntensity: 0.6 }),
         0.32, 0.32, 0.32, poi.x, 0.38, poi.y + 2.2);
     }
     if (poi.type === 'tower') {

@@ -6,7 +6,7 @@
    ============================================================ */
 import * as THREE from 'three';
 import {
-  PALETTE, makeLambert, atlasMaterial, atlasUV, setAnisotropy,
+  makeLambert, atlasMaterial, atlasUV, setAnisotropy,
   WALL_SKIN, FLOOR_SKIN
 } from '../three/materials.js';
 import {
@@ -26,7 +26,9 @@ import { buildArchitecture } from '../three/architecture.js';
   const NEAR = 0.06;
   const FAR = 120;
   const CHUNK = 32;          // 地形分块边长（格）
-  const FOG_DENSITY = 0.0125;
+  // 雾密度：明亮卡通要"看得远"。太浓会让远景糊成一片灰，
+  // 与天空的明亮蓝白形成"阴天"错觉（这是美术统一前的实际观感）。
+  const FOG_DENSITY = 0.0105;
   const ENEMY_DRAW_DIST = 64;   // 超过此距离的敌人不渲染（已经埋进雾里）
   const MAX_ENEMY_DRAW = 24;    // 同时最多渲染多少只怪（按距离取最近的一批）
 
@@ -67,8 +69,10 @@ import { buildArchitecture } from '../three/architecture.js';
     renderer.shadowMap.autoUpdate = false;      // 手动节流：地形是静态的，太阳跟着走
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.LinearToneMapping;
-    // 曝光 1.35：贴图基色在线性空间偏暗，不需要这一步整个世界会发闷
-    renderer.toneMappingExposure = 1.35;
+    // 曝光：贴图基色在线性空间偏暗，需要提亮；但不能过头——
+    // 1.35 时受光面会过曝（树叶被打成亮黄绿、银色枪身白到发光），
+    // 明亮卡通的观感来自"色彩饱和"，不是"亮度拉满"。
+    renderer.toneMappingExposure = 1.15;
     // 掠射角贴图清晰度：按 GPU 上限开满各向异性
     try {
       const maxA = renderer.capabilities.getMaxAnisotropy();
@@ -76,21 +80,25 @@ import { buildArchitecture } from '../three/architecture.js';
     } catch (e) { setAnisotropy(8); }
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x9fd6f5);
-    scene.fog = new THREE.FogExp2(0xb9dcf0, FOG_DENSITY);
+    scene.background = new THREE.Color(0x9ad4f7);
+    // 雾色必须与地平线同色系：雾用灰色会让远景整体发闷，
+    // 玩家看到的是"明亮的远处"，不是"阴天"。
+    scene.fog = new THREE.FogExp2(0xcfe8fa, FOG_DENSITY);
 
     camera = new THREE.PerspectiveCamera(FOV, 1, NEAR, FAR);
     camera.rotation.order = 'YXZ';
 
     // 光照配比（明亮卡通）：高环境光 + 中等太阳，阴影侧不糊成黑块。
-    // 目标：受光面 ≈ 反照率×1.05，背光面 ≈ 反照率×0.4
-    ambient = new THREE.AmbientLight(0xc2dcf0, 0.75);
+    // 目标：受光面 ≈ 反照率×1.05，背光面 ≈ 反照率×0.5
+    // 注意环境光的色偏：给蓝会让整个世界的中性灰（石头/石砖）泛蓝，
+    // 石砖地面会变成"蓝灰色地板"——环境光要接近中性。
+    ambient = new THREE.AmbientLight(0xe6eef6, 0.46);
     scene.add(ambient);
 
-    hemi = new THREE.HemisphereLight(0xd8eeff, 0x8fb074, 0.75);
+    hemi = new THREE.HemisphereLight(0xdff0ff, 0x9cc46a, 0.45);
     scene.add(hemi);
 
-    sun = new THREE.DirectionalLight(0xfff4de, 1.5);
+    sun = new THREE.DirectionalLight(0xfff6e2, 1.35);
     sun.position.set(36, 48, 18);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -109,11 +117,11 @@ import { buildArchitecture } from '../three/architecture.js';
     scene.add(sun);
     scene.add(sun.target);
 
-    fill = new THREE.DirectionalLight(0xbcdcff, 0.35);
+    fill = new THREE.DirectionalLight(0xbcdcff, 0.22);
     fill.position.set(-24, 22, -18);
     scene.add(fill);
 
-    rim = new THREE.DirectionalLight(0xffe0b8, 0.22);
+    rim = new THREE.DirectionalLight(0xffe0b8, 0.14);
     rim.position.set(-8, 14, 28);
     scene.add(rim);
 
@@ -153,11 +161,12 @@ import { buildArchitecture } from '../three/architecture.js';
     c.width = w; c.height = h;
     const ctx = c.getContext('2d');
     const g = ctx.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, '#2f7fd6');
-    g.addColorStop(0.42, '#9ed4f2');
-    g.addColorStop(0.5, '#cfe6ee');
-    g.addColorStop(0.58, '#93a878');
-    g.addColorStop(1, '#63794c');
+    // 与天空 shader 同一套配色：IBL 的色调直接决定金属/高光件的观感
+    g.addColorStop(0, '#3f8fe0');
+    g.addColorStop(0.42, '#a8d8f5');
+    g.addColorStop(0.5, '#daeffc');
+    g.addColorStop(0.58, '#a8c878');
+    g.addColorStop(1, '#7a9c58');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
     const sx = w * 0.72, sy = h * 0.2;
@@ -174,7 +183,7 @@ import { buildArchitecture } from '../three/architecture.js';
       const pmrem = new THREE.PMREMGenerator(renderer);
       const rt = pmrem.fromEquirectangular(t);
       scene.environment = rt.texture;
-      if ('environmentIntensity' in scene) scene.environmentIntensity = 0.45;
+      if ('environmentIntensity' in scene) scene.environmentIntensity = 0.32;
       t.dispose();
       pmrem.dispose();
     } catch (e) {
@@ -190,9 +199,11 @@ import { buildArchitecture } from '../three/architecture.js';
       depthTest: false,
       fog: false,
       uniforms: {
-        top: { value: new THREE.Color(0x2f7fd6) },
-        mid: { value: new THREE.Color(0x8ec8ee) },
-        bottom: { value: new THREE.Color(0xd8ecf8) },
+        // 明亮卡通天光：天顶饱和蓝 → 中段亮蓝 → 地平线近乎白的浅蓝。
+        // 千万别用灰（灰 = 阴天，整幅画面立刻发闷，这是美术统一前的实际观感）
+        top: { value: new THREE.Color(0x62a8ee) },
+        mid: { value: new THREE.Color(0x96cbf6) },
+        bottom: { value: new THREE.Color(0xd8eefc) },
         sunDir: { value: new THREE.Vector3(0.55, 0.62, 0.42).normalize() },
         time: { value: 0 }
       },
@@ -209,35 +220,35 @@ import { buildArchitecture } from '../three/architecture.js';
         varying vec3 vDir;
 
         float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
-        float noise(vec2 p){
-          vec2 i = floor(p), f = fract(p);
-          f = f*f*(3.0-2.0*f);
-          return mix(mix(hash(i), hash(i+vec2(1,0)), f.x),
-                     mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
-        }
-        float fbm(vec2 p){
-          float v = 0.0, a = 0.5;
-          for(int i=0;i<4;i++){ v += a*noise(p); p*=2.02; a*=0.5; }
-          return v;
-        }
 
         void main() {
           vec3 d = normalize(vDir);
           float h = clamp(d.y, -1.0, 1.0) * 0.5 + 0.5;
-          vec3 col = mix(bottom, mid, smoothstep(0.44, 0.58, h));
+          vec3 col = mix(bottom, mid, smoothstep(0.44, 0.57, h));
           col = mix(col, top, smoothstep(0.55, 0.95, h));
 
-          if (d.y > 0.03) {
-            vec2 uv = d.xz / max(d.y, 0.10) * 0.30 + vec2(time*0.0016, 0.0);
-            float c = fbm(uv * 2.0);
-            c = smoothstep(0.46, 0.80, c) * smoothstep(0.03, 0.22, d.y);
-            vec3 cloudCol = mix(vec3(0.86,0.90,0.94), vec3(1.0,0.99,0.96), c*0.6);
-            col = mix(col, cloudCol, c * 0.62);
+          /* Minecraft 式方块云：把视线方向投影到天顶平面，再量化成格子，
+             整格统一取一个哈希值 → 云是"硬边像素块"而不是软绵绵的噪声云。 */
+          if (d.y > 0.02) {
+            vec2 cuv = d.xz / max(d.y, 0.14) * 1.6;
+            cuv.x += time * 0.0008;                 // 缓慢飘移
+            vec2 q = floor(cuv);
+            // 邻域投票：让云团成片，而不是孤立小方块
+            float n = hash(q) * 0.50
+                    + hash(q + vec2( 1.0, 0.0)) * 0.15
+                    + hash(q + vec2(-1.0, 0.0)) * 0.15
+                    + hash(q + vec2( 0.0, 1.0)) * 0.10
+                    + hash(q + vec2( 0.0,-1.0)) * 0.10;
+            float cloud = step(0.62, n);
+            // 地平线附近与极远处淡出，避免云糊满视野边缘
+            float fade = smoothstep(0.03, 0.26, d.y) * (1.0 - smoothstep(7.0, 15.0, length(cuv)));
+            col = mix(col, vec3(1.0), cloud * fade * 0.9);
           }
 
+          // 太阳：小而亮的核心 + 一圈柔和光晕
           float sd = max(dot(d, sunDir), 0.0);
-          col += vec3(1.0, 0.95, 0.82) * pow(sd, 90.0) * 1.1;
-          col += vec3(1.0, 0.90, 0.70) * pow(sd, 8.0) * 0.14;
+          col += vec3(1.0, 0.97, 0.88) * pow(sd, 120.0) * 1.0;
+          col += vec3(1.0, 0.94, 0.78) * pow(sd, 8.0) * 0.12;
 
           gl_FragColor = vec4(col, 1.0);
         }
@@ -510,6 +521,8 @@ import { buildArchitecture } from '../three/architecture.js';
   /* ---------------- 枪 ---------------- */
   let weaponMesh = null;
   let weaponKind = '';
+  // 武器视模缩放：枪口火焰挂在未缩放的 weaponRoot 上，换算时必须共用这个常量
+  const WEAPON_SCALE = 0.72;
   let camShake = 0;
   let muzzleFlash = null;
   const muzzleDir = new THREE.Vector3();
@@ -547,7 +560,7 @@ import { buildArchitecture } from '../three/architecture.js';
       blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, fog: false
     });
     muzzleFlash = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 0.14), m);
-    muzzleFlash.position.set(0, 0.045, -0.50);
+    // 位置不在这里写死：由 ensureWeapon 按武器模型的枪管末端换算（见下）
     muzzleFlash.frustumCulled = false;
     muzzleFlash.renderOrder = 999;
     weaponRoot.add(muzzleFlash);
@@ -560,10 +573,14 @@ import { buildArchitecture } from '../three/architecture.js';
       disposeObject(weaponMesh);
     }
     weaponMesh = buildWeaponView(kind);
-    weaponMesh.scale.setScalar(0.75);
+    weaponMesh.scale.setScalar(WEAPON_SCALE);
     weaponKind = kind;
     weaponRoot.add(weaponMesh);
     ensureMuzzleFlash();
+    // 枪口对齐枪管末端：模型坐标 × WEAPON_SCALE（因为火焰挂在未缩放的 weaponRoot 上）。
+    // 之前两边各写各的常量 → 火焰飘在枪管前方半米，屏幕上就是个白方块。
+    const mz = weaponMesh.userData.muzzle;
+    if (mz) muzzleFlash.position.set(mz.x * WEAPON_SCALE, mz.y * WEAPON_SCALE, mz.z * WEAPON_SCALE);
   }
 
   /* ---------------- 粒子（单 draw call） ---------------- */
@@ -759,18 +776,22 @@ import { buildArchitecture } from '../three/architecture.js';
       const bobY = (G.weaponBobY || 0) * 0.0016;
       const raise = (G.weaponRaise || 0) * 0.008;
       // 视模防穿墙：沿视线探测到墙则拉近枪
-      let weaponZ = -0.44;
+      let weaponZ = -0.52;
       if (PP.World && PP.World.rayWall) {
         const dx = Math.cos(yaw) * Math.cos(pitch);
         const dy = Math.sin(yaw) * Math.cos(pitch);
         const wallD = PP.World.rayWall(camObj.x, camObj.y, dx, dy, 1.1);
         if (wallD < 0.7) {
           const k = Math.max(0.15, (wallD - 0.16) / 0.54);
-          weaponZ = -0.17 - 0.27 * k;
+          weaponZ = -0.20 - 0.32 * k;
         }
       }
-      weaponRoot.position.set(0.185 + swayX, -0.135 + bobY + raise, weaponZ);
-      weaponRoot.rotation.set(0.03 + (G.kickPitch || 0) * 0.4, 0.10, 0.015);
+      // 推远一点（-0.52）能明显减少近平面透视畸变：贴太近时枪会被拉成
+      // 一坨方块，结构全糊在一起，读不出枪形。
+      // rotation.y 给到 0.40（≈23°）：第一人称是"从正后方看枪的横截面"，
+      // 不外偏就只能看到几层方块叠起来，完全没有枪的纵深感。
+      weaponRoot.position.set(0.225 + swayX, -0.185 + bobY + raise, weaponZ);
+      weaponRoot.rotation.set(-0.04 + (G.kickPitch || 0) * 0.4, 0.40, 0.045);
       if (G.muzzleT > 0) {
         const k = Math.min(1, G.muzzleT / 0.06);
         muzzleLight.intensity = 4.5 * k;

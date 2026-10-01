@@ -90,67 +90,62 @@ export function makeTextured(kind, hex = 0xffffff, repeat = 1, opts = {}) {
 }
 
 /** 墙类型 → 纹理名 + 色调
- *  注意：贴图本身已经带基色了，这里的 color 只做"轻微偏色"，
- *  给成 0xffffff 表示不染色。以前这里给的是深色，会把贴图二次压暗。 */
+ *  注意：贴图本身已经带最终色了，这里的 color 只做"轻微偏色"，
+ *  给成 0xffffff 表示不染色。
+ *  血泪结论：这里曾经给深色值（如 bedrock 用 0xa8a8b0），顶点色与贴图相乘
+ *  会把整面墙二次压暗成近黑块，在明亮卡通场景里极其突兀。现在一律 ≥0xe0。 */
 export const WALL_SKIN = {
   1: { map: 'stone', color: 0xffffff },
-  2: { map: 'plank', color: 0xfff0dc },
-  3: { map: 'brick', color: 0xffe8e0 },
-  4: { map: 'sandstone', color: 0xfff8ec },
-  5: { map: 'plank', color: 0xe8d0b0 }, // log
-  6: { map: 'leaves', color: 0xe4f4d4 },
-  7: { map: 'cactus', color: 0xe4f4dc },
-  8: { map: 'redstone', color: 0xffe4dc },
-  9: { map: 'bedrock', color: 0xa8a8b0 }
+  2: { map: 'plank', color: 0xfff6e8 },
+  3: { map: 'brick', color: 0xfff0ea },
+  4: { map: 'sandstone', color: 0xfffaf0 },
+  5: { map: 'plank', color: 0xf2ddc4 }, // log：树皮略深一档，但不要发黑
+  6: { map: 'leaves', color: 0xeefada },
+  7: { map: 'cactus', color: 0xeafaea },
+  8: { map: 'redstone', color: 0xffeae4 },
+  9: { map: 'bedrock', color: 0xf0f0f4 }
 };
 
 export const FLOOR_SKIN = {
-  0: { map: 'grass', color: 0xeaf6d8 },
-  1: { map: 'dirt', color: 0xf4e4d0 },
-  2: { map: 'sand', color: 0xfff8e4 },
+  0: { map: 'grass', color: 0xf2fae6 },
+  1: { map: 'dirt', color: 0xfaeede },
+  2: { map: 'sand', color: 0xfffcf0 },
   3: { map: 'stone', color: 0xffffff },
-  4: { map: 'plank', color: 0xfff0d4 },
-  5: { map: 'stone', color: 0x74a8d0 }, // water-ish
-  6: { map: 'stone', color: 0xf4f8ff }
+  4: { map: 'plank', color: 0xfff6e2 },
+  5: { map: 'stone', color: 0x86c8ee }, // water-ish：明亮水蓝
+  6: { map: 'stone', color: 0xf8fcff }
 };
 
-/** 兼容旧调色 */
-export const WALL_COLORS = {
-  1: 0x9aa0a8, 2: 0xc49a62, 3: 0xb85c48, 4: 0xe0d090,
-  5: 0x8b6a42, 6: 0x4e9e3c, 7: 0x5a9e40, 8: 0xc83c30, 9: 0x4e5058
-};
-export const FLOOR_COLORS = {
-  0: 0x6eb848, 1: 0x8c6440, 2: 0xe8d8a0, 3: 0x9aa0a8,
-  4: 0xc49a62, 5: 0x3a88c8, 6: 0xe8f0f8
-};
-
+/** 全局调色板（明亮卡通 / Minecraft 取向）
+ *  约束：所有基色都要保证"受光面接近原色、背光面仍读得出形体"，
+ *  所以不用纯黑（纯黑在整个世界偏亮时反而变成突兀的黑洞）。 */
 export const PALETTE = {
-  playerShirts: [0x3a5a7a, 0x7a4038, 0x4a6a42, 0x5a4a70],
-  skin: 0xc8a080,
-  skinDark: 0x8a6850,
-  zombie: 0x6a8a50,
-  zombieDark: 0x4a6040,
-  husk: 0xb89868,
-  huskDark: 0x8a7048,
-  skeleton: 0xc8c4b0,
-  skeletonDark: 0x8a8878,
-  creeper: 0x5a8a48,
-  creeperDark: 0x3a5830,
-  spider: 0x2a2030,
-  spiderLight: 0x4a3850,
-  iron: 0xa8aeb8,
-  ironDark: 0x6a7078,
-  wood: 0x8a6840,
-  woodDark: 0x5a4028,
-  obsidian: 0x28242e,
-  redstone: 0xa83028,
-  magma: 0xb84820,
-  magmaHot: 0xe89030,
-  lapis: 0x2a4a98,
-  gold: 0xc8a040,
-  ammo: 0xa88848,
-  health: 0x8a3838,
-  shotgun: 0x6a4c30
+  playerShirts: [0x3d7bb8, 0xc05a48, 0x4e9a52, 0x7a5ab0],
+  skin: 0xd8b08c,
+  skinDark: 0xb08a68,
+  zombie: 0x5aa04a,
+  zombieDark: 0x3e7a32,
+  husk: 0xd0ae78,
+  huskDark: 0xa8825a,
+  skeleton: 0xd8d8d0,
+  skeletonDark: 0xb0b0a8,
+  creeper: 0x5cb85c,
+  creeperDark: 0x3e8c3e,
+  spider: 0x3a2e44,
+  spiderLight: 0x554466,
+  iron: 0xc8ced8,
+  ironDark: 0x8a9098,
+  wood: 0xa87b4a,
+  woodDark: 0x6b4a28,
+  obsidian: 0x3a3350,
+  redstone: 0xc02020,
+  magma: 0xe06020,
+  magmaHot: 0xf5a030,
+  lapis: 0x3a5ac8,
+  gold: 0xe8c050,
+  ammo: 0xb89858,
+  health: 0xb03030,
+  shotgun: 0x8a6440
 };
 
 export class MaterialLib {

@@ -1,6 +1,14 @@
 /* ============================================================
-   textures.js — 程序化写实纹理（Canvas → THREE.CanvasTexture）
-   目标：土感、噪点、砌缝、木纹；去高饱和像素块
+   textures.js — 程序化 Minecraft 风像素纹理
+   目标：明亮卡通 · 16×16 硬边像素 · 高饱和 · 块感清晰
+
+   历史教训（勿回退）：
+   本文件曾按"写实噪声风"实现（fbm 高频噪声 + Math.random 椭圆斑点 +
+   低饱和基色），与用户拍板的"明亮卡通 / Minecraft"方向完全相反：
+   草地变成迷彩斑块、树叶被拉伸成竖条纹、远处糊成脏色。
+   像素风的三个硬要求：① 按 16×16 网格逐像素硬边着色（绝不抗锯齿）
+   ② 固定种子 PRNG（纹理必须可复现，禁用 Math.random）
+   ③ 高饱和 Minecraft 官方调色板。
    ============================================================ */
 import * as THREE from 'three';
 
@@ -15,221 +23,254 @@ export function setAnisotropy(max) {
 }
 export function getAnisotropy() { return ANISOTROPY; }
 
-function canvas(size) {
+/* ---------------- 像素画基础设施 ----------------
+   一个方块面 = 1 米 = GRID×GRID 像素（Minecraft 的标准密度）。 */
+export const GRID = 16;        // 16×16 像素
+const CELL = 16;               // 每像素 16 设备像素
+const S = GRID * CELL;         // 256
+
+/** mulberry32 —— 固定种子 PRNG。纹理必须可复现，禁用 Math.random */
+function mulberry32(a) {
+  return function () {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function mk() {
   const c = document.createElement('canvas');
-  c.width = c.height = size;
-  return c;
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  return ctx;
 }
 
-function tex(c, repeat = 1) {
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(repeat, repeat);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = ANISOTROPY;
-  texRefs.push(t);
-  return t;
+/** 画一个"像素"（占 CELL×CELL 设备像素，硬边） */
+function px(ctx, x, y, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect((x | 0) * CELL, (y | 0) * CELL, CELL, CELL);
 }
 
-/** 多倍频值噪声 */
-function noise2(x, y, seed) {
-  const s = Math.sin(x * 127.1 + y * 311.7 + seed * 74.7) * 43758.5453;
-  return s - Math.floor(s);
-}
-
-function fbm(x, y, seed, oct = 4) {
-  let v = 0, a = 0.5, f = 1;
-  for (let i = 0; i < oct; i++) {
-    const xi = Math.floor(x * f), yi = Math.floor(y * f);
-    const fx = x * f - xi, fy = y * f - yi;
-    const u = fx * fx * (3 - 2 * fx), w = fy * fy * (3 - 2 * fy);
-    const n00 = noise2(xi, yi, seed + i);
-    const n10 = noise2(xi + 1, yi, seed + i);
-    const n01 = noise2(xi, yi + 1, seed + i);
-    const n11 = noise2(xi + 1, yi + 1, seed + i);
-    const nx0 = n00 * (1 - u) + n10 * u;
-    const nx1 = n01 * (1 - u) + n11 * u;
-    v += a * ((nx0 * (1 - w) + nx1 * w) * 2 - 1);
-    a *= 0.5; f *= 2;
-  }
-  return v;
-}
-
-function fillNoise(ctx, size, base, amp, seed, oct = 4) {
-  const img = ctx.createImageData(size, size);
-  const d = img.data;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const n = fbm(x / size * 6, y / size * 6, seed, oct);
-      const k = 1 + n * amp;
-      const i = (y * size + x) * 4;
-      d[i] = Math.min(255, Math.max(0, base[0] * k));
-      d[i + 1] = Math.min(255, Math.max(0, base[1] * k));
-      d[i + 2] = Math.min(255, Math.max(0, base[2] * k));
-      d[i + 3] = 255;
+/** 铺满整张：base 打底，extras 是 [[色值, 概率], ...] 的轻微质地变化。
+    Minecraft 的块面是"基本均匀 + 少量噪点"，不是雪花屏——所以基色要占大头。 */
+function field(ctx, rnd, base, extras = []) {
+  for (let y = 0; y < GRID; y++) {
+    for (let x = 0; x < GRID; x++) {
+      let r = rnd(), c = base;
+      for (let i = 0; i < extras.length; i++) {
+        if (r < extras[i][1]) { c = extras[i][0]; break; }
+        r -= extras[i][1];
+      }
+      px(ctx, x, y, c);
     }
   }
-  ctx.putImageData(img, 0, 0);
 }
 
-function speckle(ctx, size, n, color, rMin, rMax, alpha) {
-  ctx.save();
-  ctx.globalAlpha = alpha;
+/** 随机撒 n 个单像素点 */
+function dots(ctx, rnd, n, color) {
+  for (let i = 0; i < n; i++) px(ctx, (rnd() * GRID) | 0, (rnd() * GRID) | 0, color);
+}
+
+/** 随机撒 n 个 w×h 的小色块（比单像素更有"色斑"感） */
+function blobs(ctx, rnd, n, color, w = 2, h = 2) {
   for (let i = 0; i < n; i++) {
-    const x = Math.random() * size, y = Math.random() * size;
-    const r = rMin + Math.random() * (rMax - rMin);
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.ellipse(x, y, r, r * (0.6 + Math.random() * 0.8), Math.random() * Math.PI, 0, Math.PI * 2);
-    ctx.fill();
+    const x0 = (rnd() * (GRID - w)) | 0, y0 = (rnd() * (GRID - h)) | 0;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) px(ctx, x0 + x, y0 + y, color);
   }
-  ctx.restore();
 }
 
+/** 填一个矩形（含端点的像素坐标） */
+function rect(ctx, x0, y0, x1, y1, color) {
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) px(ctx, x, y, color);
+}
+
+/* ---------------- 12 张方块纹理 ----------------
+   统一用 Minecraft 官方调色板；草地/树叶取鲜绿，石头取中性灰，
+   木头取暖棕，砖取砖红 —— 保证在明亮天光下既有对比又不脏。 */
+
+/** 草地（地面顶面）：鲜绿 + 细微明暗点 */
 export function makeGrassTex() {
-  const S = 256, c = canvas(S), ctx = c.getContext('2d');
-  fillNoise(ctx, S, [118, 148, 78], 0.28, 11, 5);
-  speckle(ctx, S, 400, 'rgba(48,72,28,0.45)', 1, 5, 0.5);
-  speckle(ctx, S, 280, 'rgba(110,140,60,0.35)', 1, 4, 0.45);
-  speckle(ctx, S, 120, 'rgba(90,78,48,0.3)', 1, 6, 0.35);
-  // 细草茎
-  ctx.strokeStyle = 'rgba(40,60,22,0.25)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i < 180; i++) {
-    const x = Math.random() * S, y = Math.random() * S;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + (Math.random() - 0.5) * 6, y - 4 - Math.random() * 8);
-    ctx.stroke();
-  }
-  return c;
+  const ctx = mk(), rnd = mulberry32(1001);
+  field(ctx, rnd, '#7BB53C', [
+    ['#8CC94A', 0.18],
+    ['#6EA332', 0.16],
+    ['#98D65A', 0.07]
+  ]);
+  // 少量深色草叶，打散"均匀色块"感
+  dots(ctx, rnd, 16, '#5C8C28');
+  return ctx.canvas;
 }
 
+/** 泥土：暖棕 + 深浅团块 */
 export function makeDirtTex() {
-  const S = 256, c = canvas(S), ctx = c.getContext('2d');
-  fillNoise(ctx, S, [130, 98, 68], 0.28, 22, 5);
-  speckle(ctx, S, 500, 'rgba(60,42,26,0.4)', 1, 7, 0.5);
-  speckle(ctx, S, 200, 'rgba(130,100,70,0.35)', 1, 5, 0.4);
-  return c;
+  const ctx = mk(), rnd = mulberry32(1002);
+  field(ctx, rnd, '#8B6239', [
+    ['#9C7048', 0.20],
+    ['#7A5330', 0.20],
+    ['#A67C52', 0.08]
+  ]);
+  blobs(ctx, rnd, 6, '#6B4526', 2, 2);
+  dots(ctx, rnd, 10, '#B08A60');
+  return ctx.canvas;
 }
 
+/** 石头：中性灰 + 石斑（Minecraft 石头是灰不是黑） */
 export function makeStoneTex() {
-  const S = 256, c = canvas(S), ctx = c.getContext('2d');
-  fillNoise(ctx, S, [148, 148, 140], 0.2, 33, 5);
-  // 砌缝
-  ctx.strokeStyle = 'rgba(50,50,48,0.45)';
-  ctx.lineWidth = 2;
-  for (let y = 0; y < S; y += 32) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(S, y); ctx.stroke();
-    const off = (y / 32) % 2 ? 16 : 0;
-    for (let x = off; x < S; x += 48) {
-      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + 32); ctx.stroke();
-    }
-  }
-  speckle(ctx, S, 300, 'rgba(80,80,76,0.35)', 1, 4, 0.4);
-  speckle(ctx, S, 80, 'rgba(160,158,150,0.3)', 1, 3, 0.35);
-  return c;
+  const ctx = mk(), rnd = mulberry32(1003);
+  field(ctx, rnd, '#8C8C8C', [
+    ['#9C9C9C', 0.20],
+    ['#7C7C7C', 0.20],
+    ['#6E6E6E', 0.07]
+  ]);
+  blobs(ctx, rnd, 5, '#757575', 2, 2);
+  blobs(ctx, rnd, 3, '#A6A6A6', 2, 1);
+  dots(ctx, rnd, 8, '#666666');
+  return ctx.canvas;
 }
 
+/** 木板：暖棕横纹 + 4 像素一组的板缝 */
 export function makePlankTex() {
-  const S = 256, c = canvas(S), ctx = c.getContext('2d');
-  fillNoise(ctx, S, [168, 132, 82], 0.2, 44, 4);
-  // 木纹
-  for (let y = 0; y < S; y += 2) {
-    const n = fbm(0.4, y / S * 3, 44, 3);
-    const g = 1 + n * 0.18;
-    ctx.fillStyle = `rgba(${90 * g | 0},${64 * g | 0},${36 * g | 0},0.25)`;
-    ctx.fillRect(0, y, S, 2);
+  const ctx = mk(), rnd = mulberry32(1004);
+  field(ctx, rnd, '#A87B4A', [
+    ['#B98C58', 0.20],
+    ['#946B3E', 0.20]
+  ]);
+  // 板缝：每 4 行一条深色横缝
+  for (let y = 0; y < GRID; y += 4) {
+    for (let x = 0; x < GRID; x++) px(ctx, x, y, '#6B4A28');
   }
-  // 板缝
-  ctx.fillStyle = 'rgba(40,28,16,0.55)';
-  for (let y = 0; y < S; y += 42) ctx.fillRect(0, y, S, 3);
-  speckle(ctx, S, 100, 'rgba(160,120,70,0.25)', 2, 10, 0.3);
-  return c;
+  // 木纹短线（在每条板内随机竖纹）
+  for (let i = 0; i < 18; i++) {
+    const x = (rnd() * GRID) | 0;
+    const band = ((rnd() * 4) | 0) * 4;
+    const y = band + 1 + ((rnd() * 2) | 0);
+    px(ctx, x, y, '#7E5732');
+  }
+  return ctx.canvas;
 }
 
+/** 砖：错缝砖块（砖高 4px、砖宽 8px、缝 1px） */
 export function makeBrickTex() {
-  const S = 256, c = canvas(S), ctx = c.getContext('2d');
-  fillNoise(ctx, S, [150, 88, 72], 0.24, 55, 4);
-  const bh = 22, bw = 48;
-  ctx.strokeStyle = 'rgba(70,50,42,0.55)';
-  ctx.lineWidth = 3;
-  for (let row = 0, y = 0; y < S; row++, y += bh) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(S, y); ctx.stroke();
-    const off = row % 2 ? bw / 2 : 0;
-    for (let x = off; x < S; x += bw) {
-      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + bh); ctx.stroke();
+  const ctx = mk(), rnd = mulberry32(1005);
+  const brick = '#A8503E', brickL = '#B9604C', mortar = '#7A4034';
+  field(ctx, rnd, brick, [[brickL, 0.22], ['#954537', 0.20]]);
+  for (let row = 0; row < 4; row++) {
+    const y0 = row * 4;
+    // 横向灰缝
+    for (let x = 0; x < GRID; x++) px(ctx, x, y0, mortar);
+    // 竖向灰缝（隔行错开半块）
+    const off = row % 2 ? 4 : 0;
+    for (let x = off; x < GRID; x += 8) {
+      for (let y = y0 + 1; y < y0 + 4; y++) px(ctx, x, y, mortar);
     }
   }
-  speckle(ctx, S, 250, 'rgba(140,70,55,0.3)', 1, 4, 0.35);
-  return c;
+  dots(ctx, rnd, 8, '#C07060');
+  return ctx.canvas;
 }
 
+/** 沙：明亮米黄 + 细点 */
 export function makeSandTex() {
-  const S = 256, c = canvas(S), ctx = c.getContext('2d');
-  fillNoise(ctx, S, [210, 192, 148], 0.18, 66, 4);
-  speckle(ctx, S, 400, 'rgba(150,130,90,0.3)', 1, 3, 0.4);
-  speckle(ctx, S, 150, 'rgba(210,195,150,0.35)', 1, 2, 0.35);
-  return c;
+  const ctx = mk(), rnd = mulberry32(1006);
+  field(ctx, rnd, '#DCD4A0', [
+    ['#E8E0B0', 0.22],
+    ['#CFC694', 0.22],
+    ['#F0E8C0', 0.08]
+  ]);
+  dots(ctx, rnd, 14, '#BEB488');
+  return ctx.canvas;
 }
 
+/** 树叶：鲜绿 + 密集叶隙（Minecraft 树叶要读得出"一簇簇叶子"） */
 export function makeLeavesTex() {
-  const S = 256, c = canvas(S), ctx = c.getContext('2d');
-  fillNoise(ctx, S, [92, 128, 62], 0.3, 77, 5);
-  speckle(ctx, S, 600, 'rgba(30,60,22,0.45)', 2, 8, 0.5);
-  speckle(ctx, S, 200, 'rgba(80,120,48,0.35)', 2, 7, 0.4);
-  return c;
+  const ctx = mk(), rnd = mulberry32(1007);
+  field(ctx, rnd, '#3C8C28', [
+    ['#4CA336', 0.22],
+    ['#2E7520', 0.22],
+    ['#5CB03E', 0.08]
+  ]);
+  // 叶隙：深色小洞，制造通透感
+  blobs(ctx, rnd, 7, '#1E5214', 2, 2);
+  dots(ctx, rnd, 18, '#246418');
+  return ctx.canvas;
 }
 
+/** 金属：亮银灰 + 横向拉丝高光 */
 export function makeMetalTex() {
-  const S = 256, c = canvas(S), ctx = c.getContext('2d');
-  fillNoise(ctx, S, [98, 102, 108], 0.16, 88, 3);
-  // 拉丝
-  for (let i = 0; i < 200; i++) {
-    const y = Math.random() * S;
-    ctx.fillStyle = `rgba(200,205,210,${0.04 + Math.random() * 0.08})`;
-    ctx.fillRect(0, y, S, 1 + Math.random());
+  const ctx = mk(), rnd = mulberry32(1008);
+  field(ctx, rnd, '#C2C8D0', [
+    ['#D6DCE4', 0.22],
+    ['#A8AEB8', 0.22],
+    ['#E8EEF6', 0.06]
+  ]);
+  // 横向高光条
+  for (let i = 0; i < 4; i++) {
+    const y = (rnd() * GRID) | 0;
+    for (let x = 0; x < GRID; x++) px(ctx, x, y, '#E4EAF2');
   }
-  speckle(ctx, S, 80, 'rgba(40,42,46,0.35)', 1, 4, 0.35);
-  return c;
+  dots(ctx, rnd, 8, '#8E949E');
+  return ctx.canvas;
 }
 
+/** 砂岩：暖米色 + 水平层理 */
 export function makeSandstoneTex() {
-  const S = 256, c = canvas(S), ctx = c.getContext('2d');
-  fillNoise(ctx, S, [170, 148, 96], 0.22, 99, 4);
-  ctx.strokeStyle = 'rgba(120,100,60,0.25)';
-  ctx.lineWidth = 1;
-  for (let y = 0; y < S; y += 18) {
-    ctx.beginPath(); ctx.moveTo(0, y + Math.sin(y) * 2); ctx.lineTo(S, y + Math.cos(y * 0.2) * 2); ctx.stroke();
+  const ctx = mk(), rnd = mulberry32(1009);
+  field(ctx, rnd, '#D9CE9A', [
+    ['#E4DAA8', 0.20],
+    ['#C8BC86', 0.20]
+  ]);
+  // 层理：每 4 行一条略深横线
+  for (let y = 3; y < GRID; y += 4) {
+    for (let x = 0; x < GRID; x++) px(ctx, x, y, '#B8AC78');
   }
-  speckle(ctx, S, 200, 'rgba(140,120,80,0.3)', 1, 5, 0.35);
-  return c;
+  dots(ctx, rnd, 10, '#AEA26E');
+  return ctx.canvas;
 }
 
+/** 基岩：中深灰斑驳（不要纯黑——明亮卡通里纯黑会变成一大块突兀的黑墙） */
 export function makeBedrockTex() {
-  const S = 256, c = canvas(S), ctx = c.getContext('2d');
-  fillNoise(ctx, S, [88, 88, 94], 0.26, 111, 5);
-  speckle(ctx, S, 300, 'rgba(20,20,24,0.5)', 2, 10, 0.5);
-  speckle(ctx, S, 80, 'rgba(90,90,96,0.3)', 1, 4, 0.3);
-  return c;
+  const ctx = mk(), rnd = mulberry32(1010);
+  field(ctx, rnd, '#6E6E72', [
+    ['#5E5E62', 0.24],
+    ['#7E7E84', 0.24],
+    ['#4E4E52', 0.10]
+  ]);
+  blobs(ctx, rnd, 6, '#48484C', 2, 2);
+  blobs(ctx, rnd, 4, '#8E8E94', 2, 1);
+  return ctx.canvas;
 }
 
+/** 红石：饱和砖红 + 明暗红斑 */
 export function makeRedstoneTex() {
-  const S = 256, c = canvas(S), ctx = c.getContext('2d');
-  fillNoise(ctx, S, [100, 70, 64], 0.25, 122, 4);
-  speckle(ctx, S, 120, 'rgba(180,40,30,0.55)', 2, 8, 0.55);
-  speckle(ctx, S, 40, 'rgba(255,120,80,0.5)', 1, 4, 0.45);
-  return c;
+  const ctx = mk(), rnd = mulberry32(1011);
+  field(ctx, rnd, '#B02222', [
+    ['#C63030', 0.22],
+    ['#8E1616', 0.22],
+    ['#E05050', 0.08]
+  ]);
+  blobs(ctx, rnd, 5, '#7A1010', 2, 2);
+  blobs(ctx, rnd, 4, '#F07070', 1, 2);
+  return ctx.canvas;
 }
 
+/** 仙人掌：深绿 + 竖向棱线 + 白色刺点 */
 export function makeCactusTex() {
-  const S = 256, c = canvas(S), ctx = c.getContext('2d');
-  fillNoise(ctx, S, [58, 98, 48], 0.25, 133, 4);
-  ctx.fillStyle = 'rgba(30,50,24,0.35)';
-  for (let x = 0; x < S; x += 14) ctx.fillRect(x, 0, 4, S);
-  return c;
+  const ctx = mk(), rnd = mulberry32(1012);
+  field(ctx, rnd, '#2E8B2E', [
+    ['#379937', 0.24],
+    ['#257525', 0.22]
+  ]);
+  // 竖棱
+  for (const x of [0, 5, 10, 15]) {
+    for (let y = 0; y < GRID; y++) px(ctx, x, y, '#1B5A1B');
+  }
+  // 刺
+  dots(ctx, rnd, 12, '#DCE8C4');
+  return ctx.canvas;
 }
 
+/* ---------------- 打包 ---------------- */
 let cache = null;
 export function buildAllTextures() {
   if (cache) return cache;
@@ -250,17 +291,53 @@ export function buildAllTextures() {
   return cache;
 }
 
+/** 像素风的过滤配置：放大取最近邻（硬边像素），缩小走 mipmap（避免远处摩尔纹闪烁） */
+function pixelFilter(t) {
+  t.magFilter = THREE.NearestFilter;
+  t.minFilter = THREE.NearestMipmapLinearFilter;
+  t.generateMipmaps = true;
+}
+
 export function threeTex(canvasEl, repeat = 1) {
-  return tex(canvasEl, repeat);
+  const t = new THREE.CanvasTexture(canvasEl);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(repeat, repeat);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = ANISOTROPY;
+  pixelFilter(t);
+  texRefs.push(t);
+  return t;
 }
 
 /* ---------------- 纹理图集：整个世界一批材质 ----------------
-   把 12 张 256² 贴图打进一张 1024² 图集，于是「所有方块类型」可以共用
+   把 12 张 256² 贴图打进一张图集，于是「所有方块类型」可以共用
    同一个材质 → 分块网格可以把整块地形合进 1 个 draw call。
    相邻格子刻意放相近材质（草/叶、石/砂岩），减少 mip 边缘串色。 */
 export const ATLAS_COLS = 4;
 export const ATLAS_ROWS = 4;
-export const ATLAS_TILE = 256;
+export const ATLAS_TILE = 256;   // 单格内容尺寸
+/** 每格四周的护栏宽度（设备像素）。
+    像素风 + mipmap 缩小时，双线性会在格子边界采到隔壁材质 →
+    远处出现"彩色描边"。护栏把边缘像素向外延伸，采样越界时仍然是本材质的颜色。 */
+const ATLAS_PAD = 16;
+
+/** 把一格内容 + 一圈边缘延伸画进图集 */
+function blitPadded(ctx, src, dx, dy, size, pad) {
+  // 中心内容
+  ctx.drawImage(src, 0, 0, size, size, dx + pad, dy + pad, size, size);
+  const N = 1; // 取 1 像素宽的边缘，向外拉伸填满护栏
+  // 四边
+  ctx.drawImage(src, 0, 0, size, N, dx + pad, dy, size, pad);
+  ctx.drawImage(src, 0, size - N, size, N, dx + pad, dy + pad + size, size, pad);
+  ctx.drawImage(src, 0, 0, N, size, dx, dy + pad, pad, size);
+  ctx.drawImage(src, size - N, 0, N, size, dx + pad + size, dy + pad, pad, size);
+  // 四角
+  ctx.drawImage(src, 0, 0, N, N, dx, dy, pad, pad);
+  ctx.drawImage(src, size - N, 0, N, N, dx + pad + size, dy, pad, pad);
+  ctx.drawImage(src, 0, size - N, N, N, dx, dy + pad + size, pad, pad);
+  ctx.drawImage(src, size - N, size - N, N, N, dx + pad + size, dy + pad + size, pad, pad);
+}
+
 /** 图集内的排布顺序（索引 = 槽位） */
 export const ATLAS_ORDER = [
   'grass', 'leaves', 'dirt', 'sand',
@@ -272,48 +349,48 @@ let atlasCache = null;
 export function buildAtlas() {
   if (atlasCache) return atlasCache;
   const src = buildAllTextures();
+  const slotW = ATLAS_TILE + ATLAS_PAD * 2;
   const c = document.createElement('canvas');
-  c.width = ATLAS_TILE * ATLAS_COLS;
-  c.height = ATLAS_TILE * ATLAS_ROWS;
+  c.width = slotW * ATLAS_COLS;
+  c.height = slotW * ATLAS_ROWS;
   const ctx = c.getContext('2d');
   ctx.imageSmoothingEnabled = false;
   const uvOf = {};
   ATLAS_ORDER.forEach((name, i) => {
     const col = i % ATLAS_COLS;
     const row = (i / ATLAS_COLS) | 0;
-    ctx.drawImage(src[name], col * ATLAS_TILE, row * ATLAS_TILE);
+    blitPadded(ctx, src[name], col * slotW, row * slotW, ATLAS_TILE, ATLAS_PAD);
     uvOf[name] = i;
   });
-  atlasCache = { canvas: c, index: uvOf };
+  atlasCache = { canvas: c, index: uvOf, slotW, pad: ATLAS_PAD };
   return atlasCache;
 }
 
-/** 取某张贴图在图集里的 UV 矩形（含半像素内缩，抗采样串色）
+/** 取某张贴图在图集里的 UV 矩形（只取内容区，护栏不参与 UV）
  *  CanvasTexture 默认 flipY=true → 图集第 0 行映射到 v 的上方 */
-export function atlasUV(name, inset = 1.5) {
+export function atlasUV(name) {
   const A = buildAtlas();
   const i = A.index[name];
   if (i === undefined) return [0, 0, 1, 1];
-  const W = ATLAS_TILE * ATLAS_COLS, H = ATLAS_TILE * ATLAS_ROWS;
+  const W = A.slotW * ATLAS_COLS, H = A.slotW * ATLAS_ROWS;
   const col = i % ATLAS_COLS, row = (i / ATLAS_COLS) | 0;
-  const u0 = (col * ATLAS_TILE + inset) / W;
-  const u1 = ((col + 1) * ATLAS_TILE - inset) / W;
-  const v1 = 1 - (row * ATLAS_TILE + inset) / H;
-  const v0 = 1 - ((row + 1) * ATLAS_TILE - inset) / H;
+  const u0 = (col * A.slotW + A.pad) / W;
+  const u1 = (col * A.slotW + A.pad + ATLAS_TILE) / W;
+  const v1 = 1 - (row * A.slotW + A.pad) / H;
+  const v0 = 1 - (row * A.slotW + A.pad + ATLAS_TILE) / H;
   return [u0, v0, u1, v1];
 }
 
 /** 把图集包成 THREE 纹理（单例） */
 let atlasTexRef = null;
-export function atlasTexture(THREE) {
+export function atlasTexture(THREE_) {
   if (atlasTexRef) return atlasTexRef;
   const A = buildAtlas();
-  const t = new THREE.CanvasTexture(A.canvas);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  const t = new THREE_.CanvasTexture(A.canvas);
+  t.colorSpace = THREE_.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE_.ClampToEdgeWrapping;
   t.anisotropy = ANISOTROPY;
-  t.generateMipmaps = true;
-  t.minFilter = THREE.LinearMipmapLinearFilter;
+  pixelFilter(t);
   t.needsUpdate = true;
   atlasTexRef = t;
   texRefs.push(t);

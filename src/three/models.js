@@ -39,9 +39,6 @@ function cylGeo(rt, rb, h, seg) {
   return cachedGeo(`c${rt.toFixed(4)}_${rb.toFixed(4)}_${h.toFixed(4)}_${seg}`,
     () => new THREE.CylinderGeometry(rt, rb, h, seg));
 }
-function sphGeo(r, ws, hs) {
-  return cachedGeo(`s${r.toFixed(4)}_${ws}_${hs}`, () => new THREE.SphereGeometry(r, ws, hs));
-}
 
 /* ---------------- 零件工厂（统一走顶点色，便于合并） ---------------- */
 function withColor(geo, colorHex) {
@@ -193,30 +190,30 @@ export function buildHumanoid(opts = {}) {
   const armL = group('armL');
   armL.position.set(-0.205 * bulk, shoulderY - 0.03, 0);
   root.add(armL);
-  part(cylGeo(0.050, 0.044, 0.21 * k, 7), limb, 0, -0.105 * k, 0, armL);
-  part(cylGeo(0.044, 0.040, 0.19 * k, 7), skinDark, 0, -0.295 * k, 0, armL);
-  part(boxGeo(0.075, 0.085, 0.065), skin, 0, -0.42 * k, 0, armL);
+  part(boxGeo(0.105, 0.21 * k, 0.105), limb, 0, -0.105 * k, 0, armL);
+  part(boxGeo(0.088, 0.19 * k, 0.088), skinDark, 0, -0.295 * k, 0, armL);
+  part(boxGeo(0.095, 0.085, 0.095), skin, 0, -0.42 * k, 0, armL);
 
   const armR = group('armR');
   armR.position.set(0.205 * bulk, shoulderY - 0.03, 0);
   root.add(armR);
-  part(cylGeo(0.050, 0.044, 0.21 * k, 7), limb, 0, -0.105 * k, 0, armR);
-  part(cylGeo(0.044, 0.040, 0.19 * k, 7), skinDark, 0, -0.295 * k, 0, armR);
-  part(boxGeo(0.075, 0.085, 0.065), skin, 0, -0.42 * k, 0, armR);
+  part(boxGeo(0.105, 0.21 * k, 0.105), limb, 0, -0.105 * k, 0, armR);
+  part(boxGeo(0.088, 0.19 * k, 0.088), skinDark, 0, -0.295 * k, 0, armR);
+  part(boxGeo(0.095, 0.085, 0.095), skin, 0, -0.42 * k, 0, armR);
 
   const legL = group('legL');
   legL.position.set(-0.095 * bulk, hipY - 0.04, 0);
   root.add(legL);
-  part(cylGeo(0.078, 0.058, 0.23 * k, 7), limb, 0, -0.125 * k, 0, legL);
-  part(cylGeo(0.052, 0.044, 0.19 * k, 7), skinDark, 0, -0.33 * k, 0, legL);
-  part(boxGeo(0.105, 0.06, 0.17), 0x2a2824, 0, -0.44 * k, 0.025, legL);
+  part(boxGeo(0.155, 0.23 * k, 0.155), limb, 0, -0.125 * k, 0, legL);
+  part(boxGeo(0.118, 0.19 * k, 0.125), skinDark, 0, -0.33 * k, 0, legL);
+  part(boxGeo(0.135, 0.06, 0.19), 0x3a3630, 0, -0.44 * k, 0.025, legL);
 
   const legR = group('legR');
   legR.position.set(0.095 * bulk, hipY - 0.04, 0);
   root.add(legR);
-  part(cylGeo(0.078, 0.058, 0.23 * k, 7), limb, 0, -0.125 * k, 0, legR);
-  part(cylGeo(0.052, 0.044, 0.19 * k, 7), skinDark, 0, -0.33 * k, 0, legR);
-  part(boxGeo(0.105, 0.06, 0.17), 0x2a2824, 0, -0.44 * k, 0.025, legR);
+  part(boxGeo(0.155, 0.23 * k, 0.155), limb, 0, -0.125 * k, 0, legR);
+  part(boxGeo(0.118, 0.19 * k, 0.125), skinDark, 0, -0.33 * k, 0, legR);
+  part(boxGeo(0.135, 0.06, 0.19), 0x3a3630, 0, -0.44 * k, 0.025, legR);
 
   finalize(root);
   root.userData.anim = { head: headG, armL, armR, legL, legR, torso: root, walkPhase: 0 };
@@ -265,26 +262,26 @@ export function buildSkeleton() {
   const armL = group('armL');
   armL.position.set(-0.185, 0.62 * k, 0);
   root.add(armL);
-  part(cylGeo(0.030, 0.024, 0.23 * k, 6), bone, 0, -0.115 * k, 0, armL);
-  part(cylGeo(0.024, 0.020, 0.19 * k, 6), bone, 0, -0.29 * k, 0, armL);
+  part(boxGeo(0.058, 0.23 * k, 0.058), bone, 0, -0.115 * k, 0, armL);
+  part(boxGeo(0.046, 0.19 * k, 0.046), bone, 0, -0.29 * k, 0, armL);
 
   const armR = group('armR');
   armR.position.set(0.185, 0.62 * k, 0);
   root.add(armR);
-  part(cylGeo(0.030, 0.024, 0.23 * k, 6), bone, 0, -0.115 * k, 0, armR);
-  part(cylGeo(0.024, 0.020, 0.19 * k, 6), bone, 0, -0.29 * k, 0, armR);
+  part(boxGeo(0.058, 0.23 * k, 0.058), bone, 0, -0.115 * k, 0, armR);
+  part(boxGeo(0.046, 0.19 * k, 0.046), bone, 0, -0.29 * k, 0, armR);
 
   const legL = group('legL');
   legL.position.set(-0.075, 0.28 * k, 0);
   root.add(legL);
-  part(cylGeo(0.034, 0.028, 0.23 * k, 6), bone, 0, -0.115 * k, 0, legL);
-  part(cylGeo(0.026, 0.022, 0.17 * k, 6), bone, 0, -0.29 * k, 0, legL);
+  part(boxGeo(0.068, 0.23 * k, 0.068), bone, 0, -0.115 * k, 0, legL);
+  part(boxGeo(0.052, 0.17 * k, 0.052), bone, 0, -0.29 * k, 0, legL);
 
   const legR = group('legR');
   legR.position.set(0.075, 0.28 * k, 0);
   root.add(legR);
-  part(cylGeo(0.034, 0.028, 0.23 * k, 6), bone, 0, -0.115 * k, 0, legR);
-  part(cylGeo(0.026, 0.022, 0.17 * k, 6), bone, 0, -0.29 * k, 0, legR);
+  part(boxGeo(0.068, 0.23 * k, 0.068), bone, 0, -0.115 * k, 0, legR);
+  part(boxGeo(0.052, 0.17 * k, 0.052), bone, 0, -0.29 * k, 0, legR);
 
   finalize(root);
   root.userData.anim = { head: headG, armL, armR, legL, legR, torso: root, walkPhase: 0 };
@@ -296,7 +293,7 @@ export function buildCreeper() {
   const body = PALETTE.creeper;
   const dark = PALETTE.creeperDark;
 
-  part(cylGeo(0.17, 0.19, 0.64, 8), body, 0, 0.52, 0, root);
+  box(0.36, 0.64, 0.30, body, 0, 0.52, 0, root);
   box(0.13, 0.19, 0.13, dark, -0.13, 0.62, 0.10, root);
   box(0.11, 0.15, 0.11, dark, 0.15, 0.40, -0.08, root);
 
@@ -316,8 +313,8 @@ export function buildCreeper() {
     const leg = group('leg' + li++);
     leg.position.set(sx, 0.22, sz);
     root.add(leg);
-    part(cylGeo(0.062, 0.052, 0.27, 7), dark, 0, -0.085, 0, leg);
-    part(boxGeo(0.125, 0.05, 0.145), 0x1a2218, 0, -0.23, 0.01, leg);
+    part(boxGeo(0.125, 0.27, 0.125), dark, 0, -0.085, 0, leg);
+    part(boxGeo(0.14, 0.05, 0.16), 0x3a4a30, 0, -0.23, 0.01, leg);
     legs.push(leg);
   }
 
@@ -334,9 +331,7 @@ export function buildSpider() {
   const body = PALETTE.spider;
   const light = PALETTE.spiderLight;
 
-  const ab = part(sphGeo(0.23, 10, 8), body, 0, 0.30, -0.19, root);
-  ab.scale.set(1.1, 0.75, 1.35);
-  ab.updateMatrix();
+  box(0.50, 0.34, 0.62, body, 0, 0.30, -0.19, root);
   box(0.17, 0.10, 0.21, light, 0, 0.36, -0.29, root);
 
   const headG = group('head');
@@ -357,9 +352,9 @@ export function buildSpider() {
       const leg = group('spiderLeg');
       leg.position.set(side * 0.16, 0.28, z);
       root.add(leg);
-      const u = part(cylGeo(0.026, 0.021, 0.23, 6), body, side * 0.12, 0.02, 0, leg);
+      const u = part(boxGeo(0.055, 0.23, 0.055), body, side * 0.12, 0.02, 0, leg);
       u.rotation.z = side * -0.9;
-      const l = part(cylGeo(0.021, 0.016, 0.23, 6), body, side * 0.28, -0.12, 0, leg);
+      const l = part(boxGeo(0.044, 0.23, 0.044), body, side * 0.28, -0.12, 0, leg);
       l.rotation.z = side * 0.35;
       legs.push(leg);
     }
@@ -373,28 +368,36 @@ export function buildSpider() {
   return root;
 }
 
-/* ---------------- 武器视模（不合并，保留金属/自发光材质） ---------------- */
+/* ---------------- 武器视模（不合并，保留金属/自发光材质） ----------------
+   血泪结论：
+   ① 材质 color 会与贴图相乘 → 贴图已带最终色时 color 一律用近似白，
+      否则木色贴图 × 木色 ≈ 深褐，整个枪糊成一坨看不出结构。
+   ② 视模不能做成"高金属度"：金属没有漫反射，背光/阴影里会直接变黑。
+      卡通风格下用低金属度 + 亮基色，保证任何光照下都读得出枪形。
+   ③ userData.muzzle 必须落在枪管末端：枪口火焰挂在 weaponRoot 上（不随
+      武器缩放），ensureWeapon 会用它按 0.75 缩放换算出火焰位置。
+      曾经两处各写各的坐标 → 火焰飘在枪管前方半米，像个白方块。 */
 let weaponMats = null;
 function wmats() {
   if (!weaponMats) {
     weaponMats = {
-      // 视模不能做成"高金属度"：金属没有漫反射，背光/阴影里会直接变黑。
-      // 卡通风格下用低金属度 + 亮基色，保证任何光照下都读得出枪形。
-      iron: makeTextured('metal', 0xc6ccd6, 1, { metalness: 0.2, roughness: 0.58 }),
-      dark: makeTextured('metal', 0x71787f, 1, { metalness: 0.18, roughness: 0.62 }),
-      wood: makeTextured('plank', PALETTE.wood, 1, { roughness: 0.78 }),
-      woodD: makeTextured('plank', PALETTE.woodDark, 1, { roughness: 0.82 }),
-      obsidian: makeTextured('bedrock', PALETTE.obsidian, 1, { metalness: 0.4, roughness: 0.35 }),
-      redstone: makeTextured('redstone', PALETTE.redstone, 1, {
-        metalness: 0.55, roughness: 0.4,
-        emissive: PALETTE.redstone, emissiveIntensity: 0.30
+      iron: makeTextured('metal', 0xc0c6ce, 1, { metalness: 0.2, roughness: 0.58 }),
+      dark: makeTextured('metal', 0x7e858e, 1, { metalness: 0.18, roughness: 0.62 }),
+      wood: makeTextured('plank', 0xffffff, 1, { roughness: 0.78 }),
+      woodD: makeTextured('plank', 0xb08858, 1, { roughness: 0.82 }),
+      obsidian: makeTextured('bedrock', 0x8a86a8, 1, { metalness: 0.35, roughness: 0.4 }),
+      redstone: makeTextured('redstone', 0xffffff, 1, {
+        metalness: 0.35, roughness: 0.42,
+        emissive: 0xc02020, emissiveIntensity: 0.32
       }),
-      hot: makeMat(PALETTE.magmaHot, { emissive: PALETTE.magmaHot, emissiveIntensity: 1.0 }),
-      magma: makeTextured('redstone', PALETTE.magma, 1, {
-        metalness: 0.4, roughness: 0.5,
-        emissive: PALETTE.magma, emissiveIntensity: 0.32
+      // 发光件不能给满：emissive 与 diffuse 是叠加的，红色通道最先饱和，
+      // 强度拉满时熔岩管会糊成一块纯橙色塑料，纹理细节全丢。
+      hot: makeMat(0xd87828, { emissive: 0xb84808, emissiveIntensity: 0.30 }),
+      magma: makeTextured('redstone', 0xd07848, 1, {
+        metalness: 0.25, roughness: 0.55,
+        emissive: 0xd84808, emissiveIntensity: 0.22
       }),
-      lapis: makeTextured('metal', PALETTE.lapis, 1, { metalness: 0.6, roughness: 0.38 })
+      lapis: makeTextured('metal', 0x6a8ae8, 1, { metalness: 0.45, roughness: 0.4 })
     };
   }
   return weaponMats;
@@ -406,43 +409,64 @@ export function buildWeaponView(kind = 'pistol') {
   const bw = (w, h, d, x, y, z, mat) => box(w, h, d, 0, x, y, z, root, mat);
 
   if (kind === 'shotgun') {
-    bw(0.10, 0.09, 0.55, 0, 0, -0.18, M.wood);
-    bw(0.08, 0.07, 0.12, 0, 0.01, -0.02, M.dark);
-    bw(0.07, 0.06, 0.42, 0, 0.03, -0.40, M.dark);
-    bw(0.075, 0.05, 0.18, 0, -0.02, -0.28, M.woodD);
-    bw(0.11, 0.14, 0.16, 0, -0.10, 0.14, M.woodD);
-    bw(0.03, 0.04, 0.06, 0, -0.06, -0.05, M.dark);
+    // 长枪：木托 + 单管 + 下挂弹仓 + 护木
+    bw(0.090, 0.115, 0.26, 0, -0.055, 0.19, M.wood);     // 枪托
+    bw(0.100, 0.115, 0.20, 0, -0.005, 0.01, M.dark);     // 机匣
+    bw(0.058, 0.058, 0.36, 0, 0.035, -0.30, M.iron);     // 枪管
+    bw(0.044, 0.044, 0.30, 0, -0.030, -0.27, M.dark);    // 弹仓管
+    bw(0.082, 0.062, 0.20, 0, -0.045, -0.20, M.woodD);   // 护木
+    const g1 = bw(0.078, 0.135, 0.10, 0, -0.140, 0.10, M.woodD);  // 握把
+    g1.rotation.x = -0.24;
+    bw(0.016, 0.030, 0.022, 0, 0.078, -0.44, M.dark);    // 准星
+    root.userData.muzzle = new THREE.Vector3(0, 0.035, -0.48);
   } else if (kind === 'pulse' || kind === 'redstone') {
-    bw(0.11, 0.14, 0.38, 0, 0, -0.14, M.obsidian);
-    bw(0.06, 0.05, 0.30, 0, 0.08, -0.30, M.redstone);
-    bw(0.05, 0.05, 0.10, 0, 0.08, -0.48, M.hot);
-    bw(0.09, 0.16, 0.12, 0, -0.13, 0.06, M.dark);
-    bw(0.13, 0.05, 0.18, 0, 0.13, -0.10, M.redstone);
+    // 能量枪：暗色枪身 + 发光红石导轨 + 灼热枪口
+    const g2 = bw(0.088, 0.160, 0.115, 0, -0.155, 0.05, M.dark);  // 握把
+    g2.rotation.x = -0.26;
+    bw(0.115, 0.150, 0.34, 0, -0.015, -0.08, M.obsidian);// 枪身
+    bw(0.060, 0.050, 0.30, 0, 0.082, -0.30, M.redstone); // 能量导轨
+    bw(0.072, 0.072, 0.06, 0, 0.082, -0.475, M.hot);     // 枪口核心
+    bw(0.135, 0.050, 0.18, 0, 0.132, -0.06, M.redstone); // 散热罩
+    bw(0.040, 0.075, 0.14, -0.078, 0.020, -0.22, M.dark);// 侧翼
+    bw(0.040, 0.075, 0.14, 0.078, 0.020, -0.22, M.dark);
+    root.userData.muzzle = new THREE.Vector3(0, 0.082, -0.505);
   } else if (kind === 'sniper' || kind === 'lapis') {
-    bw(0.075, 0.09, 0.72, 0, 0, -0.28, M.iron);
-    bw(0.06, 0.055, 0.50, 0, 0.07, -0.34, M.lapis);
-    bw(0.05, 0.05, 0.20, 0, 0.12, -0.28, M.dark);
-    bw(0.10, 0.08, 0.24, 0, -0.01, 0.12, M.wood);
-    bw(0.13, 0.13, 0.18, 0, -0.11, 0.22, M.woodD);
-    bw(0.07, 0.12, 0.10, 0, -0.12, 0.02, M.dark);
-    bw(0.025, 0.03, 0.02, 0, 0.10, -0.58, M.dark);
+    // 狙击：长枪管 + 蓝宝石瞄准镜 + 木托
+    bw(0.088, 0.110, 0.22, 0, -0.060, 0.20, M.wood);     // 枪托
+    bw(0.085, 0.120, 0.28, 0, -0.005, -0.03, M.dark);    // 机匣
+    bw(0.052, 0.052, 0.42, 0, 0.035, -0.31, M.iron);     // 枪管
+    bw(0.065, 0.065, 0.05, 0, 0.035, -0.50, M.dark);     // 枪口制退器
+    bw(0.070, 0.070, 0.22, 0, 0.125, -0.16, M.lapis);    // 瞄准镜
+    bw(0.028, 0.075, 0.09, 0, 0.075, -0.11, M.dark);     // 镜架
+    const g3 = bw(0.080, 0.140, 0.10, 0, -0.140, 0.07, M.woodD);   // 握把
+    g3.rotation.x = -0.28;
+    root.userData.muzzle = new THREE.Vector3(0, 0.035, -0.525);
   } else if (kind === 'magma' || kind === 'lava') {
-    bw(0.14, 0.16, 0.34, 0, 0, -0.12, M.dark);
-    bw(0.11, 0.11, 0.28, 0, 0.03, -0.32, M.magma);
-    bw(0.09, 0.09, 0.12, 0, 0.03, -0.50, M.hot);
-    bw(0.10, 0.16, 0.12, 0, -0.14, 0.06, M.woodD);
-    bw(0.16, 0.07, 0.16, 0, 0.14, -0.12, M.magma);
-    bw(0.04, 0.04, 0.08, 0.08, 0.02, -0.40, M.dark);
-    bw(0.04, 0.04, 0.08, -0.08, 0.02, -0.40, M.dark);
+    // 熔岩枪：厚实枪身 + 灼热熔岩管 + 侧散热口
+    const g4 = bw(0.090, 0.170, 0.12, 0, -0.160, 0.06, M.woodD);   // 握把
+    g4.rotation.x = -0.26;
+    bw(0.130, 0.160, 0.30, 0, -0.015, -0.06, M.dark);    // 枪身
+    bw(0.100, 0.100, 0.24, 0, 0.035, -0.29, M.magma);    // 熔岩管
+    bw(0.088, 0.088, 0.07, 0, 0.035, -0.45, M.hot);      // 枪口
+    bw(0.040, 0.060, 0.12, -0.085, 0.035, -0.16, M.dark);// 侧散热口
+    bw(0.040, 0.060, 0.12, 0.085, 0.035, -0.16, M.dark);
+    root.userData.muzzle = new THREE.Vector3(0, 0.035, -0.485);
   } else {
-    bw(0.09, 0.12, 0.22, 0, 0, -0.08, M.iron);
-    bw(0.07, 0.10, 0.18, 0, 0.02, -0.18, M.iron);
-    bw(0.075, 0.14, 0.10, 0, -0.11, 0.02, M.woodD);
-    bw(0.04, 0.03, 0.08, 0, 0.07, -0.02, M.dark);
-    bw(0.02, 0.025, 0.02, 0, 0.08, -0.22, M.dark);
+    // 手枪：细长套筒 + 薄机匣 + 细枪管 + 前后瞄具 + 后倾握把。
+    // 结构分层（银/灰/木三色对比）+ 握把后倾角 = "枪感"；
+    // 全灰 + 竖直握把曾经看起来就是一座积木塔。
+    const grip = bw(0.082, 0.175, 0.100, 0, -0.140, 0.035, M.woodD);
+    grip.rotation.x = -0.26;
+    bw(0.092, 0.105, 0.240, 0, -0.010, -0.075, M.dark);   // 机匣
+    bw(0.072, 0.046, 0.290, 0, 0.070, -0.095, M.iron);    // 套筒
+    bw(0.042, 0.042, 0.240, 0, 0.028, -0.345, M.iron);    // 枪管（伸出足够长才看得见）
+    bw(0.014, 0.026, 0.020, 0, 0.103, -0.230, M.dark);    // 准星
+    bw(0.044, 0.020, 0.024, 0, 0.098, 0.015, M.dark);     // 照门
+    bw(0.024, 0.044, 0.060, 0, -0.070, -0.010, M.dark);   // 扳机护圈
+    bw(0.086, 0.020, 0.105, 0, -0.222, 0.035, M.dark);    // 弹匣底
+    root.userData.muzzle = new THREE.Vector3(0, 0.028, -0.465);
   }
 
-  root.userData.muzzle = new THREE.Vector3(0, 0.04, -0.62);
   root.userData.__dynamicGeos = true;   // 这些几何体是新建的，可以安全释放
   return root;
 }
@@ -488,14 +512,6 @@ export function buildBoneProjectile() {
   box(0.10, 0.08, 0.06, 0xc8c4b0, 0, 0, 0.10, root);
   box(0.10, 0.08, 0.06, 0xc8c4b0, 0, 0, -0.10, root);
   finalize(root);
-  return root;
-}
-
-export function buildTree() {
-  const root = group('tree');
-  cyl(0.12, 0.18, 1.2, 0, 0, 0.6, 0, root, 8, makeTextured('plank', 0x8a6840, 1));
-  cyl(0.7, 0.9, 1.0, 0, 0, 1.55, 0, root, 7, makeTextured('leaves', 0x5a8a40, 1));
-  cyl(0.5, 0.7, 0.8, 0, 0, 2.25, 0, root, 7, makeTextured('leaves', 0x6a9a48, 1));
   return root;
 }
 
