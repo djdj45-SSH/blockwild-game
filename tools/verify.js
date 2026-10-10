@@ -290,11 +290,13 @@ z1.spawnT = 0;
 let hits = PP.Ent.hitscan(G2, G2.player, spot.a, 0, 0, 40, 1);
 ok(hits.length > 0 && hits[0].kind === 'enemy', '正前方敌人被命中');
 ok(hits.length && hits[0].head === false, '平视命中躯干');
-G2.player.pitch = 0.16;
-hits = PP.Ent.hitscan(G2, G2.player, spot.a, 0.16, 0, 40, 1);
+// 角度按新尺寸重标：玩家眼高 1.62 / 敌人高 1.8，
+// 0.05 rad 在 3~5 米处抬高 0.15~0.25 → z≈1.77~1.87，刚好落在爆头线 1.66 以上且不脱离顶部
+G2.player.pitch = 0.05;
+hits = PP.Ent.hitscan(G2, G2.player, spot.a, 0.05, 0, 40, 1);
 ok(hits.length && hits[0].head === true, '抬头 → 爆头');
-G2.player.pitch = -0.3;
-ok(PP.Ent.hitscan(G2, G2.player, spot.a, -0.3, 0, 40, 1).length === 0, '朝脚下不命中');
+G2.player.pitch = -0.7;
+ok(PP.Ent.hitscan(G2, G2.player, spot.a, -0.7, 0, 40, 1).length === 0, '朝脚下不命中');
 G2.player.pitch = 0;
 ok(PP.Ent.hitscan(G2, G2.player, spot.a + Math.PI, 0, 0, 40, 1).length === 0, '背向不命中');
 
@@ -484,7 +486,7 @@ const hpC = meC.hp;
 for (let i = 0; i < 40; i++) PP.Sim.tick(GC);
 ok(meC.hp < hpC || creep.state === 'dead', '爬行者接近后引爆（HP ' + hpC.toFixed(0) + '→' + meC.hp.toFixed(0) + '）');
 const spider = PP.Ent.spawn(GC, 'spider', meC.x + 4, meC.y);
-ok(spider.T.speed > 3 && spider.height < 0.7, '蜘蛛高速低矮 speed=' + spider.T.speed);
+ok(spider.T.speed > 3 && spider.height < 1.0, '蜘蛛高速低矮 speed=' + spider.T.speed);
 
 /* ================= 6. 多人 / 倒地救援 / 友伤 / 快照 ================= */
 console.log('[MULTI]');

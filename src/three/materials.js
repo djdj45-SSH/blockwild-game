@@ -1,14 +1,25 @@
 /* ============================================================
-   materials.js — 写实 PBR + 程序化纹理
+   materials.js — Minecraft 原版纹理 + 方块材质
    ============================================================ */
 import * as THREE from 'three';
-import { buildAllTextures, threeTex, atlasTexture, atlasUV, setAnisotropy, ATLAS_ORDER } from './textures.js';
+import { threeTex, atlasTexture, atlasUV, setAnisotropy, ATLAS_ORDER } from './textures.js';
 
 export { atlasUV, setAnisotropy, ATLAS_ORDER };
 
 /* ---------------- 图集材质：整个地形共用一份 ----------------
-   所有方块类型都从同一张 1024² 图集采样，所以分块网格可以把
-   "整块地形的墙 + 地面"压成极少的 draw call。 */
+   所有方块类型都从同一张图集采样，所以分块网格可以把
+   "整块地形的墙 + 地面"压成极少的 draw call。
+
+   alphaTest = 树叶镂空 —— 原版 oak_leaves 的 alpha 是**二元**的
+   （完全透明 0 或完全不透明 255，没有中间值），所以阈值取 0.5 正好卡中间：
+   实体像素（255）稳过、镂空像素（0）稳剔，中值不会被误判。
+
+   ⚠️ 曾经用 0.1，理由是"怕把远处 mipmap 混合出的中间 alpha 也剔掉"。
+   这是**错的**：用对照实验（maxMipLevel 0/1/2/∞ 各截一张）验证过，
+   远处树冠的"蓝白网格"与 mip 层级完全无关 —— 它是树叶贴图里
+   约 30% 的镂空像素透出**后面的天空**。0.1 会让 mip 混合出的
+   浅色半透明像素（alpha≈0.2）也通过测试，屏幕上就是"半透明的网"，
+   网格反而更明显。0.5 把这一层滤掉，树冠立刻收紧。 */
 let atlasMat = null;
 export function atlasMaterial() {
   if (atlasMat) return atlasMat;
@@ -18,29 +29,33 @@ export function atlasMaterial() {
     vertexColors: true,
     roughness: 0.94,
     metalness: 0.0,
+    alphaTest: 0.5,
     side: THREE.FrontSide
   });
   atlasMat.name = 'terrain';
   return atlasMat;
 }
 
+/* 独立纹理（武器 / 建筑这类需要各自 metalness / roughness 的物体） */
 let texCache = null;
 function T() {
   if (!texCache) {
-    const raw = buildAllTextures();
     texCache = {
-      grass: threeTex(raw.grass, 1),
-      dirt: threeTex(raw.dirt, 1),
-      stone: threeTex(raw.stone, 1),
-      plank: threeTex(raw.plank, 1),
-      brick: threeTex(raw.brick, 1),
-      sand: threeTex(raw.sand, 1),
-      leaves: threeTex(raw.leaves, 1),
-      metal: threeTex(raw.metal, 1),
-      sandstone: threeTex(raw.sandstone, 1),
-      bedrock: threeTex(raw.bedrock, 1),
-      redstone: threeTex(raw.redstone, 1),
-      cactus: threeTex(raw.cactus, 1)
+      grass: threeTex('grass_top', 1),
+      dirt: threeTex('dirt', 1),
+      stone: threeTex('stone', 1),
+      plank: threeTex('plank', 1),
+      brick: threeTex('brick', 1),
+      sand: threeTex('sand', 1),
+      leaves: threeTex('leaves', 1),
+      metal: threeTex('iron', 1),          // 原版 iron_block
+      sandstone: threeTex('sandstone', 1),
+      bedrock: threeTex('bedrock', 1),
+      redstone: threeTex('redstone', 1),
+      cactus: threeTex('cactus_side', 1),
+      log: threeTex('log_side', 1),
+      obsidian: threeTex('obsidian', 1),
+      gold: threeTex('gold', 1)
     };
   }
   return texCache;
@@ -89,31 +104,39 @@ export function makeTextured(kind, hex = 0xffffff, repeat = 1, opts = {}) {
   });
 }
 
-/** 墙类型 → 纹理名 + 色调
- *  注意：贴图本身已经带最终色了，这里的 color 只做"轻微偏色"，
- *  给成 0xffffff 表示不染色。
- *  血泪结论：这里曾经给深色值（如 bedrock 用 0xa8a8b0），顶点色与贴图相乘
- *  会把整面墙二次压暗成近黑块，在明亮卡通场景里极其突兀。现在一律 ≥0xe0。 */
+/** 墙类型 → 图集纹理名。
+ *  ⚠️ color 用 0xffffff 之外的值只有一种情况：**原图是灰度**。
+ *  Minecraft 把 grass_block_top / oak_leaves / water_still 存成灰度图，
+ *  颜色在运行时由 biome color 乘上去（colormap/grass.png 之类）。
+ *  直接用原图会得到一片灰白 —— 这不是纹理错了，是缺了染色这一步。
+ *  这里给的就是原版 plains 群系的默认色。
+ *  `map` = 侧面纹理，`top` = 顶面纹理（缺省则与侧面相同）。
+ *  Minecraft 里原木、仙人掌的顶面本来就与侧面不同，这是它的特征之一。 */
 export const WALL_SKIN = {
   1: { map: 'stone', color: 0xffffff },
-  2: { map: 'plank', color: 0xfff6e8 },
-  3: { map: 'brick', color: 0xfff0ea },
-  4: { map: 'sandstone', color: 0xfffaf0 },
-  5: { map: 'plank', color: 0xf2ddc4 }, // log：树皮略深一档，但不要发黑
-  6: { map: 'leaves', color: 0xeefada },
-  7: { map: 'cactus', color: 0xeafaea },
-  8: { map: 'redstone', color: 0xffeae4 },
-  9: { map: 'bedrock', color: 0xf0f0f4 }
+  2: { map: 'plank', color: 0xffffff },
+  3: { map: 'brick', color: 0xffffff },
+  4: { map: 'sandstone', color: 0xffffff },
+  5: { map: 'log_side', top: 'log_top', color: 0xffffff },
+  6: { map: 'leaves', color: 0x77ab2f },      // 原图是灰度 → 补 foliage 染色
+  7: { map: 'cactus_side', top: 'cactus_top', color: 0xffffff },
+  8: { map: 'redstone', color: 0xffffff },
+  9: { map: 'bedrock', color: 0xffffff }
 };
 
 export const FLOOR_SKIN = {
-  0: { map: 'grass', color: 0xf2fae6 },
-  1: { map: 'dirt', color: 0xfaeede },
-  2: { map: 'sand', color: 0xfffcf0 },
+  0: { map: 'grass_top', color: 0x91bd59 },   // 原图是灰度 → 补 grass 染色
+  1: { map: 'dirt', color: 0xffffff },
+  2: { map: 'sand', color: 0xffffff },
   3: { map: 'stone', color: 0xffffff },
-  4: { map: 'plank', color: 0xfff6e2 },
-  5: { map: 'stone', color: 0x86c8ee }, // water-ish：明亮水蓝
-  6: { map: 'stone', color: 0xf8fcff }
+  4: { map: 'plank', color: 0xffffff },
+  // 水：原图 water_still 是灰度，颜色由 biome color 乘上去。
+  // 0x3f76e4 是原版的"水色常量"，但直接乘灰度图（均值 188）再经曝光 1.15，
+  // 屏幕上是刺眼的荧光蓝 —— 原版还有 alpha 0.72 + 水面光照衰减在压它。
+  // 这里折到 0x2f66c8（更沉稳、略带钢蓝），配合 render3d 的水面波纹，
+  // 才是 Minecraft 湖面在明亮日光下的观感。
+  5: { map: 'water', color: 0x2f66c8 },
+  6: { map: 'snow', color: 0xffffff }
 };
 
 /** 全局调色板（明亮卡通 / Minecraft 取向）

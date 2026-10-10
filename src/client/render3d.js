@@ -9,6 +9,8 @@ import {
   makeLambert, atlasMaterial, atlasUV, setAnisotropy,
   WALL_SKIN, FLOOR_SKIN
 } from '../three/materials.js';
+import { preloadAtlas, atlasReady } from '../three/textures.js';
+import { preloadEntityAtlas, entityReady } from '../three/mcModel.js';
 import {
   buildPlayer, buildEnemy, buildWeaponView, buildPickup,
   buildBoneProjectile, animateHumanoid, animateSpider, disposeObject
@@ -20,15 +22,19 @@ import { buildArchitecture } from '../three/architecture.js';
   const PP = (ROOT.PP = ROOT.PP || {});
   const R = (PP.Render = PP.Render || {});
 
-  const EYE = 0.62;          // 站立视高（玩家模型高 0.98）
-  const EYE_DOWN = 0.34;     // 倒地视高
+  // 视高按 Minecraft 原版：玩家模型 1.8 米，眼睛在 1.62 米
+  // （旧的自定义模型只高 0.98 米，换原版模型后必须同步抬高，否则视线在胸口）
+  const EYE = 1.62;          // 站立视高
+  const EYE_DOWN = 0.42;     // 倒地视高（爬行时的眼睛贴地）
   const FOV = 72;
   const NEAR = 0.06;
   const FAR = 120;
   const CHUNK = 32;          // 地形分块边长（格）
   // 雾密度：明亮卡通要"看得远"。太浓会让远景糊成一片灰，
   // 与天空的明亮蓝白形成"阴天"错觉（这是美术统一前的实际观感）。
-  const FOG_DENSITY = 0.0105;
+  // Minecraft 的雾很"远"：默认渲染距离内几乎看不出雾，远方才淡淡地化进天空色。
+  // 密度给大了远处会糊成一片白，整幅画面立刻失去"方块世界"的通透感。
+  const FOG_DENSITY = 0.0062;
   const ENEMY_DRAW_DIST = 64;   // 超过此距离的敌人不渲染（已经埋进雾里）
   const MAX_ENEMY_DRAW = 24;    // 同时最多渲染多少只怪（按距离取最近的一批）
 
@@ -59,6 +65,22 @@ import { buildArchitecture } from '../three/architecture.js';
   R.sunOffset = new THREE.Vector3(30, 26, 20);
 
   /* ---------------- 初始化 ---------------- */
+  /** 预加载 Minecraft 原版纹理图集。
+      必须在 init 之前完成：材质与地形 UV 都在 init 里按图集布局算好，
+      图集晚到会导致已经建好的地形 UV 错位。由 game.js 的 boot() 等待。 */
+  R.preload = async function () {
+    await Promise.all([preloadAtlas(), preloadEntityAtlas()]);
+  };
+
+  /** 纹理是否已就绪。调用它会顺带启动加载（幂等）。
+      存在的意义：Node 同步断言环境（tools/verify.js）下这两个都"立即就绪"，
+      boot() 就不必 await，能做到同步跑完；浏览器里才真正走异步等待。 */
+  R.ready = function () {
+    preloadAtlas();
+    preloadEntityAtlas();
+    return atlasReady() && entityReady();
+  };
+
   R.init = function (cvs) {
     canvas = cvs;
     renderer = new THREE.WebGLRenderer({
@@ -402,6 +424,14 @@ import { buildArchitecture } from '../three/architecture.js';
     return (n00 * (1 - sx) + n10 * sx) * (1 - sz) + (n01 * (1 - sx) + n11 * sx) * sz;
   }
 
+  /* 图集 UV 缓存：atlasUV 每次返回新数组，逐格调用会凭空产生上万个临时数组 */
+  const uvCache = new Map();
+  function atlasUVC(name) {
+    let u = uvCache.get(name);
+    if (!u) { u = atlasUV(name); uvCache.set(name, u); }
+    return u;
+  }
+
   const tintCache = new Map();
   const tintTmp = new THREE.Color();
   function tintOf(hex, k) {
@@ -506,37 +536,43 @@ import { buildArchitecture } from '../three/architecture.js';
             if (wt) {
               const h = wallHeight(wt);
               const skin = WALL_SKIN[wt] || WALL_SKIN[1];
-              const uv = atlasUV(skin.map || 'stone');
+              // 顶面 / 侧面可以是不同贴图（原木、仙人掌在 Minecraft 里就是这样）
+              const uvS = atlasUVC(skin.map || 'stone');
+              const uvT = skin.top ? atlasUVC(skin.top) : uvS;
               const nX = solidAt(x + 1, z), pX = solidAt(x - 1, z);
               const nZ = solidAt(x, z + 1), pZ = solidAt(x, z - 1);
               const buried = nX && pX && nZ && pZ;
-              // 各面明度差同样要按线性空间给：视觉差 1.06 / 0.94 / 1.0 / 0.87
+              // 各面明度差照搬 Minecraft 的固定系数表：顶 1.0 / 南北 0.8 / 东西 0.6。
+              // MC 不用真实光照算面亮度，而是硬编码这几个系数 —— 正是这张表让它的
+              // 方块有"稳定、干净、一眼认得出"的立体感，而不是随太阳角度乱变。
+              // 顶点色在线性空间，所以填的是 visual^2.4：1.26 / 0.77 / 0.40
               if (!buried) {
                 const wh = ((x * 73856093) ^ (z * 19349663)) & 255;
-                pushTop(wP, wN, wU, wC, x, h, z, x + 1, z + 1, uv,
-                  tintOf(skin.color, 1.18 + (wh / 255) * 0.16), wh & 3);
+                pushTop(wP, wN, wU, wC, x, h, z, x + 1, z + 1, uvT,
+                  tintOf(skin.color, 1.20 + (wh / 255) * 0.12));
               }
-              if (!nX) pushSide(wP, wN, wU, wC, '+x', x, z, x + 1, z + 1, 0, h, uv, tintOf(skin.color, 1.10));
-              if (!pX) pushSide(wP, wN, wU, wC, '-x', x, z, x + 1, z + 1, 0, h, uv, tintOf(skin.color, 0.86));
-              if (!nZ) pushSide(wP, wN, wU, wC, '+z', x, z, x + 1, z + 1, 0, h, uv, tintOf(skin.color, 1.00));
-              if (!pZ) pushSide(wP, wN, wU, wC, '-z', x, z, x + 1, z + 1, 0, h, uv, tintOf(skin.color, 0.72));
+              if (!nX) pushSide(wP, wN, wU, wC, '+x', x, z, x + 1, z + 1, 0, h, uvS, tintOf(skin.color, 0.42));
+              if (!pX) pushSide(wP, wN, wU, wC, '-x', x, z, x + 1, z + 1, 0, h, uvS, tintOf(skin.color, 0.38));
+              if (!nZ) pushSide(wP, wN, wU, wC, '+z', x, z, x + 1, z + 1, 0, h, uvS, tintOf(skin.color, 0.80));
+              if (!pZ) pushSide(wP, wN, wU, wC, '-z', x, z, x + 1, z + 1, 0, h, uvS, tintOf(skin.color, 0.74));
               // 墙体占格 → 该格地面被压住，不生成（省 ~15% 地面三角形）
               continue;
             }
             const ty = floor ? (floor[i] || 0) : 0;
             const fskin = FLOOR_SKIN[ty] || FLOOR_SKIN[0];
-            const fuv = atlasUV(fskin.map || 'grass');
+            const fuv = atlasUVC(fskin.map || 'grass_top');
             // 三层色差：两个不同尺度的平滑噪声给"成片的深浅"，逐格高频给细节。
-            // ⚠️ 顶点色在线性空间，±6% 到屏幕上只剩 ±2.5%，草地会像一整块纯色；
-            // 要看出层次，线性振幅得给到 ±14% 左右（k_linear ≈ ratio^2.4）。
+            // 色差只留极轻一档：Minecraft 在同一个 biome 内草地颜色是完全一致的，
+            // 原版纹理本身已带像素噪点，再叠大振幅色差反而"不像"。
             const n1 = vnoise(x * 0.13, z * 0.13, 7);
             const n2 = vnoise(x * 0.34, z * 0.31, 23);
             const hi = (((x >> 1) * 73856093) ^ ((z >> 1) * 19349663)) & 255;
-            const fk = 0.875 + n1 * 0.10 + n2 * 0.075 + (hi / 255) * 0.055;
+            const fk = 0.96 + n1 * 0.05 + n2 * 0.035 + (hi / 255) * 0.025;
 
-            // 顶点级 AO（Minecraft 的 smooth lighting）：贴墙/贴树的那个角压暗。
-            // 整格统一压暗是没用的 —— 必须按角算，墙体根部才会出现"建筑落在地上"
-            // 的接触阴影。地面占画面一半，这是"画面发平"最直接的解药。
+            /* 顶点级 AO（Minecraft 的 smooth lighting）：贴墙/贴树的那个角压暗。
+               整格统一压暗是没用的 —— 必须按角算，墙体根部才会出现"建筑落在地上"
+               的接触阴影。地面占画面一半，这是"画面发平"最直接的解药。
+               ⚠️ 必须在下面的水判断之前算好：水面也要吃 AO（岸边水更暗）。 */
             const sN = solidAt(x, z - 1) ? 1 : 0, sS = solidAt(x, z + 1) ? 1 : 0;
             const sW = solidAt(x - 1, z) ? 1 : 0, sE = solidAt(x + 1, z) ? 1 : 0;
             const a0 = 1 - 0.30 * (sN + sW) - 0.15 * (solidAt(x - 1, z - 1) ? 1 : 0);
@@ -544,10 +580,25 @@ import { buildArchitecture } from '../three/architecture.js';
             const a2 = 1 - 0.30 * (sE + sS) - 0.15 * (solidAt(x + 1, z + 1) ? 1 : 0);
             const a3 = 1 - 0.30 * (sN + sE) - 0.15 * (solidAt(x + 1, z - 1) ? 1 : 0);
 
-            // UV 旋转档位逐格变化（不要复用 hi：hi 是按 2×2 分块的，
-            // 那样会有 2×2 格的方块贴图方向完全一致，仍能看出规律）
+            /* 水面：Minecraft 的水面低于方块顶面 1/8 格（water 方块高 14/16），
+               并且有随位置的波纹明暗。不做这两件事，水就是"一块蓝色塑料板"，
+               这是"像不像 MC"在湖边的第一眼判据。
+               WATER_DROP = 0.125 格 = 1/8，原版就是 14/16 高度。 */
+            if (ty === 5) {
+              // 波纹：两个不同尺度的噪声叠加，只轻微改明暗（±6%），
+              // 幅度大了会变成"脏水面"，原版水面是很干净的。
+              const w1 = vnoise(x * 0.21, z * 0.19, 131);
+              const w2 = vnoise(x * 0.57, z * 0.61, 977);
+              const wk = 0.94 + w1 * 0.08 + w2 * 0.05;
+              pushTop(fP, fN, fU, fC, x, -0.125, z, x + 1, z + 1, fuv,
+                tintOf(fskin.color, wk), 0, [a0, a1, a2, a3]);
+              continue;
+            }
+
+            // 不做 UV 旋转：Minecraft 的方块纹理朝向是固定的，一片草地就是
+            // 同一个 16×16 图案重复 —— 这正是它的样子，随机旋转反而"不像"。
             pushTop(fP, fN, fU, fC, x, 0, z, x + 1, z + 1, fuv,
-              tintOf(fskin.color, fk), (x * 7 + z * 13) & 3, [a0, a1, a2, a3]);
+              tintOf(fskin.color, fk), 0, [a0, a1, a2, a3]);
           }
         }
 
@@ -633,8 +684,20 @@ import { buildArchitecture } from '../three/architecture.js';
   /* ---------------- 枪 ---------------- */
   let weaponMesh = null;
   let weaponKind = '';
-  // 武器视模缩放：枪口火焰挂在未缩放的 weaponRoot 上，换算时必须共用这个常量
-  const WEAPON_SCALE = 0.70;
+  /* 武器视模缩放。
+   *
+   * ⚠️ 这里踩过一个坑，记录下来避免再犯：
+   * 曾经为了"让手臂占屏幕高度 45%"把距离从 0.55 推到 1.148 米、缩放降到 0.46。
+   * 计算本身没错，但**手臂是 weaponRoot 的子节点**，推远后手臂跟着变小，
+   * 结果枪小到认不出、手几乎看不见 —— 因为我把"手臂该多大"和"枪该多大"
+   * 当成同一个自由度了，实际它们必须**分别**标定：
+   *   · 手臂大小 ← 由 weaponRoot 到相机的距离决定（0.55 米时合适）
+   *   · 枪的大小 ← 由 WEAPON_SCALE 决定（与距离无关）
+   * 所以距离回到 0.55，只把武器本身缩到能读清但不遮视野的程度。 */
+  const WEAPON_SCALE = 0.56;
+  // 视模到相机的距离（米）。0.55 是"手臂在屏幕上占比合适"的位置，
+  // 别再为了缩小枪而改这个值 —— 改 WEAPON_SCALE。
+  const VIEW_Z = -0.55;
   let camShake = 0;
   let muzzleFlash = null;
   const muzzleDir = new THREE.Vector3();
@@ -893,8 +956,8 @@ import { buildArchitecture } from '../three/architecture.js';
       const swayX = (G.weaponSwayX || 0) * 0.10;
       const bobY = (G.weaponBobY || 0) * 0.0016;
       const raise = (G.weaponRaise || 0) * 0.008;
-      // 视模防穿墙：沿视线探测到墙则拉近枪
-      let weaponZ = -0.55;
+      // 视模防穿墙：沿视线探测到墙则拉近枪。
+      let weaponZ = VIEW_Z;
       if (PP.World && PP.World.rayWall) {
         const dx = Math.cos(yaw) * Math.cos(pitch);
         const dy = Math.sin(yaw) * Math.cos(pitch);
@@ -904,11 +967,9 @@ import { buildArchitecture } from '../three/architecture.js';
           weaponZ = -0.22 - 0.33 * k;
         }
       }
-      // 推远一点（-0.55）能明显减少近平面透视畸变：贴太近时枪会被拉成
-      // 一坨方块，结构全糊在一起，读不出枪形。
-      // rotation.y 给到 0.38（≈22°）：第一人称是"从正后方看枪的横截面"，
+      // 落点按屏幕比例给：x/|z| = 0.364（右侧 36%）、y/|z| = -0.291（下方 29%）。
+      // rotation.y 保持 0.42（≈24°）：第一人称是"从正后方看枪的横截面"，
       // 不外偏就只能看到几层方块叠起来，完全没有枪的纵深感。
-      // y 抬到 -0.16：加了方块手之后视觉重心会下坠，抬一点才不会"整只手沉在屏幕外"。
       weaponRoot.position.set(0.200 + swayX, -0.160 + bobY + raise, weaponZ);
       weaponRoot.rotation.set(-0.04 + (G.kickPitch || 0) * 0.4, 0.42, 0.045);
       if (G.muzzleT > 0) {

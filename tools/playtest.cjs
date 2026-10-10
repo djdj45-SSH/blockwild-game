@@ -128,6 +128,30 @@ const ok = (c, m) => { if (!c) fails.push(m); console.log((c ? '  PASS  ' : '  F
       console.log('   ... 20s 节点', JSON.stringify(st));
     }
   }
+  // 命中诊断：直接对着最近的怪打一发 hitscan，看射线到底卡在哪一层
+  const diag = await page.evaluate(() => {
+    const G = window.PP.G, p = G.player;
+    let best = null, bd = 1e9;
+    for (const e of (G.enemies || [])) {
+      if (e.state !== 'alive') continue;
+      const d = (e.x - p.x) ** 2 + (e.y - p.y) ** 2;
+      if (d < bd) { bd = d; best = e; }
+    }
+    if (!best) return { none: true };
+    const dist = Math.sqrt(bd);
+    const a = Math.atan2(best.y - p.y, best.x - p.x);
+    const hits = window.PP.Ent.hitscan(G, p, a, 0, 0, 40, 1);
+    const wallD = window.PP.World.rayWall(p.x, p.y, Math.cos(a), Math.sin(a), 40);
+    return {
+      dist: +dist.toFixed(2), eH: best.height, z0: best.z0,
+      wallD: +wallD.toFixed(2), hits: hits.length,
+      z: hits.length ? +hits[0].z.toFixed(3) : null,
+      head: hits.length ? hits[0].head : null,
+      downed: !!p.downed, pitch: p.pitch
+    };
+  });
+  console.log('   [命中诊断]', JSON.stringify(diag));
+
   const ev = await page.evaluate(() => {
     const ft = window.__ft.slice(50).sort((a, b) => a - b);
     return {

@@ -476,7 +476,9 @@
   }
 
   /* ---------------- boot ---------------- */
-  function boot() {
+  // async：要先等 Minecraft 纹理图集解码完再 init —— 材质和地形 UV 都依赖它，
+  // 图集晚到会让已经建好的地形 UV 错位（会看到满屏错乱的贴图碎片）。
+  async function boot() {
     canvas = document.getElementById('view');
     PP.Hud.init();
     PP.Hud._sTitle = document.getElementById('s-title');
@@ -486,9 +488,6 @@
 
     // 移动端：默认降分辨率（软件光栅化成本 = 像素数），再靠自适应继续降
     if (PP.Touch.isTouch()) PP.Render.quality = 0.55;
-    PP.Render.init(canvas);
-    PP.Touch.init();
-    PP.Settings.init();          // 读档后会覆盖画质 / 音量 / 灵敏度
 
     // 设置面板入口
     const openSet = () => { PP.Settings.open(); if (document.pointerLockElement) document.exitPointerLock(); };
@@ -607,6 +606,17 @@
 
     bindInput();
 
+    // ---- 纹理就绪后再建渲染器 ----
+    // 放在所有 UI 绑定之后：boot 变成 async 后，await 之后的代码会被推到微任务里，
+    // 如果把 addEventListener 放在 await 后面，同步的验证脚本（tools/verify.js）
+    // 会看不到监听器（曾经就直接 FAIL 在这一条）。
+    // ready() 在 Node 环境恒为 true（没有 Image 可加载），所以测试路径完全同步。
+    // 用存在性判断兜住测试环境里的 Render stub（tools/verify.js 只实现了 frame/resize）。
+    if (PP.Render.ready && !PP.Render.ready()) await PP.Render.preload();
+    PP.Render.init(canvas);
+    PP.Touch.init();
+    PP.Settings.init();          // 读档后会覆盖画质 / 音量 / 灵敏度
+
     // 标题背景：用固定种子渲染一帧
     G = PP.Sim.create(20240917, { solo: true });
     const me = PP.Sim.addPlayer(G, 999, 'preview');
@@ -618,6 +628,7 @@
     rafId = requestAnimationFrame(loop);
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-  else boot();
+  const runBoot = () => { boot().catch((e) => { console.error('[boot]', e); }); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', runBoot);
+  else runBoot();
 })();

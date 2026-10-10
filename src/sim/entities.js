@@ -8,35 +8,43 @@
   const E = (PP.Ent = {});
   const W = () => PP.World;
 
-  /* ---------------- 敌人配置 ---------------- */
+  /* 玩家视高（米）。必须与 /src/client/render3d.js 的 EYE / EYE_DOWN 一致 ——
+     两处不一致会出现"准星明明瞄着头、射线却从胸口穿过"的诡异手感。
+     值取自 Minecraft 原版：模型 1.8 米，眼睛在 1.62 米。 */
+  const EYE_H = 1.62, EYE_LOW = 0.42, PLAYER_H = 1.80;
+
+  /* ---------------- 敌人配置 ----------------
+     ⚠️ height 必须与 /src/three/mcModel.js 里的模型实际高度一致：
+     换成 Minecraft 原版模型后，人形是 32px×PX = 1.8 米、苦力怕 26px = 1.46 米。
+     命中判定的射线-包围盒相交用这个值，对不上就会出现"明明打中却穿过去"。 */
   E.TYPES = {
     zombie: {
       key: 'zombie', hp: 40, speed: 2.30, radius: 0.30,
-      height: 0.98, z0: 0,
+      height: 1.80, z0: 0,
       dmg: 9, atkRange: 1.05, atkCd: 0.85, windup: 0.32,
       score: 100, ranged: false, mass: 1, xp: 12
     },
     husk: {
       key: 'husk', hp: 140, speed: 1.34, radius: 0.42,
-      height: 1.34, z0: 0,
+      height: 1.80, z0: 0,
       dmg: 24, atkRange: 1.30, atkCd: 1.30, windup: 0.45,
       score: 260, ranged: false, mass: 3, xp: 34
     },
     skeleton: {
       key: 'skeleton', hp: 44, speed: 1.65, radius: 0.32,
-      height: 0.90, z0: 0,
+      height: 1.80, z0: 0,
       dmg: 12, atkRange: 999, atkCd: 1.85, windup: 0.42,
       score: 190, ranged: true, shootRange: 12, projSpeed: 7.2, mass: 1, xp: 20
     },
     creeper: {
       key: 'creeper', hp: 55, speed: 2.05, radius: 0.32,
-      height: 1.05, z0: 0,
+      height: 1.46, z0: 0,
       dmg: 38, atkRange: 1.55, atkCd: 99, windup: 0.95,
       score: 220, ranged: false, explode: true, blastR: 2.6, mass: 2, xp: 28
     },
     spider: {
       key: 'spider', hp: 26, speed: 3.55, radius: 0.24,
-      height: 0.58, z0: 0,
+      height: 0.90, z0: 0,
       dmg: 5, atkRange: 0.95, atkCd: 0.42, windup: 0.16,
       score: 130, ranged: false, mass: 0.7, xp: 15
     }
@@ -383,6 +391,9 @@
     const wallD = w.rayWall(shooter.x, shooter.y, dx, dy, range);
     const tanP = Math.tan(pitch);
     const hits = [];
+    // 射线起点 = 视高（倒地时贴地），以前写死 0.5 米 —— 那是"人只有 0.98 米高"
+    // 时代的数值，换成 MC 模型后不改就会系统性打偏。
+    const eye = shooter.downed ? EYE_LOW : EYE_H;
 
     for (let i = 0; i < G.enemies.length; i++) {
       const e = G.enemies[i];
@@ -392,10 +403,13 @@
       if (t <= 0.05 || t > range || t > wallD) continue;
       const lat = -ex * dy + ey * dx;
       if (Math.abs(lat) > e.radius * 1.08) continue;
-      const z = 0.5 + tanP * t;
+      const z = eye + tanP * t;
       const zTop = e.z0 + e.height, zBot = e.z0;
       if (z < zBot - 0.12 || z > zTop + 0.10) continue;
-      hits.push({ kind: 'enemy', e: e, dist: t, head: z >= zBot + e.height * 0.70, x: shooter.x + dx * t, y: shooter.y + dy * t, z: z });
+      // 爆头线 0.92：玩家眼高 1.62、人形敌人高 1.8 —— 阈值给 0.70 的话
+      // 平视就正好落在"头部"（1.26 以上），变成"不用抬枪也爆头"，爆头失去意义。
+      // 0.92×1.8 = 1.66 > 1.62，平视打躯干、稍微上抬才是爆头。
+      hits.push({ kind: 'enemy', e: e, dist: t, head: z >= zBot + e.height * 0.92, x: shooter.x + dx * t, y: shooter.y + dy * t, z: z });
     }
 
     if (G.friendlyFire > 0) {
@@ -406,9 +420,9 @@
         if (t <= 0.25 || t > range || t > wallD) continue;
         const lat = -ex * dy + ey * dx;
         if (Math.abs(lat) > 0.34) continue;
-        const z = 0.5 + tanP * t;
-        if (z < -0.1 || z > 1.15) continue;
-        hits.push({ kind: 'player', p: p, dist: t, head: z > 0.85, x: shooter.x + dx * t, y: shooter.y + dy * t, z: z });
+        const z = eye + tanP * t;
+        if (z < -0.1 || z > PLAYER_H + 0.12) continue;
+        hits.push({ kind: 'player', p: p, dist: t, head: z > PLAYER_H * 0.72, x: shooter.x + dx * t, y: shooter.y + dy * t, z: z });
       }
     }
 

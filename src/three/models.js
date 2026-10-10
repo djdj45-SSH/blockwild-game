@@ -8,6 +8,10 @@
    ============================================================ */
 import * as THREE from 'three';
 import { PALETTE, MaterialLib, makeMetal, makeMat, makeTextured } from './materials.js';
+import {
+  buildMcHumanoid, buildMcCreeper, buildMcSpider,
+  buildArmGeo, entityMaterial, ARM_TO_BLOCK
+} from './mcModel.js';
 
 const mats = new MaterialLib();
 
@@ -152,220 +156,47 @@ function finalize(root) {
   return root;
 }
 
-/* ---------------- 人形（方块卡通比例） ---------------- */
-export function buildHumanoid(opts = {}) {
-  const {
-    shirt = PALETTE.playerShirts[0],
-    skin = PALETTE.skin,
-    skinDark = PALETTE.skinDark,
-    limb = shirt,
-    head = skin,
-    eye = 0x1a1a18,
-    height = 0.98,
-    bulk = 1
-  } = opts;
+/* ---------------- 角色：Minecraft 原版模型 ----------------
+   这里曾经是"纯色方块人"（四肢用 box + 顶点色拼）。比例和配色都对，但
+   Minecraft 里角色的脸、衣服、花纹是**贴图**而不是色块 —— 要"跟我的世界一样"
+   就必须换成原版模型 + UV 展开。模型与 UV 规则在 mcModel.js，这里只做接口适配。
 
-  const root = group('humanoid');
-  const k = height / 0.98;
-  const headH = 0.16 * k;
-  const torsoH = 0.30 * k;
-  const hipY = 0.34 * k;
-  const shoulderY = hipY + torsoH;
-  const headY = shoulderY + headH * 0.62;
-
-  box(0.30 * bulk, 0.13 * k, 0.19 * bulk, limb, 0, hipY, 0, root);
-  box(0.34 * bulk, torsoH, 0.19 * bulk, shirt, 0, hipY + torsoH * 0.45, 0, root);
-  box(0.37 * bulk, 0.09 * k, 0.16 * bulk, shirt, 0, shoulderY - 0.02 * k, 0, root);
-  box(0.05 * bulk, 0.05 * k, 0.02, 0x2a2a28, 0, hipY + torsoH * 0.85, 0.10, root);
-
-  const headG = group('head');
-  headG.position.set(0, headY, 0);
-  root.add(headG);
-  box(0.22, headH, 0.22, head, 0, 0, 0, headG);
-  box(0.17, headH * 0.42, 0.19, skinDark, 0, -headH * 0.34, 0.008, headG);
-  box(0.055, 0.035, 0.02, eye, -0.055, headH * 0.10, 0.115, headG);
-  box(0.055, 0.035, 0.02, eye, 0.055, headH * 0.10, 0.115, headG);
-  box(0.19, 0.028, 0.045, skinDark, 0, headH * 0.30, 0.095, headG);
-
-  const armL = group('armL');
-  armL.position.set(-0.205 * bulk, shoulderY - 0.03, 0);
-  root.add(armL);
-  part(boxGeo(0.105, 0.21 * k, 0.105), limb, 0, -0.105 * k, 0, armL);
-  part(boxGeo(0.088, 0.19 * k, 0.088), skinDark, 0, -0.295 * k, 0, armL);
-  part(boxGeo(0.095, 0.085, 0.095), skin, 0, -0.42 * k, 0, armL);
-
-  const armR = group('armR');
-  armR.position.set(0.205 * bulk, shoulderY - 0.03, 0);
-  root.add(armR);
-  part(boxGeo(0.105, 0.21 * k, 0.105), limb, 0, -0.105 * k, 0, armR);
-  part(boxGeo(0.088, 0.19 * k, 0.088), skinDark, 0, -0.295 * k, 0, armR);
-  part(boxGeo(0.095, 0.085, 0.095), skin, 0, -0.42 * k, 0, armR);
-
-  const legL = group('legL');
-  legL.position.set(-0.095 * bulk, hipY - 0.04, 0);
-  root.add(legL);
-  part(boxGeo(0.155, 0.23 * k, 0.155), limb, 0, -0.125 * k, 0, legL);
-  part(boxGeo(0.118, 0.19 * k, 0.125), skinDark, 0, -0.33 * k, 0, legL);
-  part(boxGeo(0.135, 0.06, 0.19), 0x3a3630, 0, -0.44 * k, 0.025, legL);
-
-  const legR = group('legR');
-  legR.position.set(0.095 * bulk, hipY - 0.04, 0);
-  root.add(legR);
-  part(boxGeo(0.155, 0.23 * k, 0.155), limb, 0, -0.125 * k, 0, legR);
-  part(boxGeo(0.118, 0.19 * k, 0.125), skinDark, 0, -0.33 * k, 0, legR);
-  part(boxGeo(0.135, 0.06, 0.19), 0x3a3630, 0, -0.44 * k, 0.025, legR);
-
-  finalize(root);
-  root.userData.anim = { head: headG, armL, armR, legL, legR, torso: root, walkPhase: 0 };
-  return root;
-}
+   节点结构（head / armL / armR / legL / legR）与旧模型完全一致，
+   所以 animateHumanoid / animateSpider 一行都不用改。 */
 
 export function buildPlayer(colorIdx = 0) {
-  const shirt = PALETTE.playerShirts[colorIdx % PALETTE.playerShirts.length];
-  return buildHumanoid({ shirt, limb: shirt, head: PALETTE.skin, eye: 0x1a1a18 });
+  // 原版只有两个玩家皮肤：wide（steve）/ slim（alex）
+  const wide = (colorIdx % 2) === 0;
+  return buildMcHumanoid(wide ? 'steve' : 'alex', { slim: !wide, limb64: true });
 }
 
 export function buildZombie() {
-  return buildHumanoid({
-    shirt: PALETTE.zombie, limb: PALETTE.zombie, head: PALETTE.zombie,
-    skinDark: PALETTE.zombieDark, eye: 0x203018
-  });
+  return buildMcHumanoid('zombie', { limb64: true });
 }
 
 export function buildHusk() {
-  return buildHumanoid({
-    shirt: PALETTE.husk, limb: PALETTE.husk, head: PALETTE.husk,
-    skinDark: PALETTE.huskDark, eye: 0x282018, height: 1.34, bulk: 1.15
-  });
+  return buildMcHumanoid('husk', { limb64: true });
 }
 
 export function buildSkeleton() {
-  const root = group('skeleton');
-  const bone = PALETTE.skeleton;
-  const boneD = PALETTE.skeletonDark;
-  const k = 0.90 / 0.98;
-
-  box(0.17, 0.29 * k, 0.11, bone, 0, 0.50 * k, 0, root);
-  for (let i = 0; i < 4; i++) {
-    box(0.27 - i * 0.02, 0.03, 0.13, boneD, 0, 0.40 * k + i * 0.055, 0.01, root);
-  }
-  box(0.19, 0.08, 0.13, boneD, 0, 0.30 * k, 0, root);
-
-  const headG = group('head');
-  headG.position.set(0, 0.78 * k, 0);
-  root.add(headG);
-  box(0.19, 0.19, 0.19, bone, 0, 0, 0, headG);
-  box(0.06, 0.05, 0.03, 0x101010, -0.05, 0.02, 0.10, headG);
-  box(0.06, 0.05, 0.03, 0x101010, 0.05, 0.02, 0.10, headG);
-  box(0.10, 0.03, 0.02, 0x101010, 0, -0.04, 0.10, headG);
-
-  const armL = group('armL');
-  armL.position.set(-0.185, 0.62 * k, 0);
-  root.add(armL);
-  part(boxGeo(0.058, 0.23 * k, 0.058), bone, 0, -0.115 * k, 0, armL);
-  part(boxGeo(0.046, 0.19 * k, 0.046), bone, 0, -0.29 * k, 0, armL);
-
-  const armR = group('armR');
-  armR.position.set(0.185, 0.62 * k, 0);
-  root.add(armR);
-  part(boxGeo(0.058, 0.23 * k, 0.058), bone, 0, -0.115 * k, 0, armR);
-  part(boxGeo(0.046, 0.19 * k, 0.046), bone, 0, -0.29 * k, 0, armR);
-
-  const legL = group('legL');
-  legL.position.set(-0.075, 0.28 * k, 0);
-  root.add(legL);
-  part(boxGeo(0.068, 0.23 * k, 0.068), bone, 0, -0.115 * k, 0, legL);
-  part(boxGeo(0.052, 0.17 * k, 0.052), bone, 0, -0.29 * k, 0, legL);
-
-  const legR = group('legR');
-  legR.position.set(0.075, 0.28 * k, 0);
-  root.add(legR);
-  part(boxGeo(0.068, 0.23 * k, 0.068), bone, 0, -0.115 * k, 0, legR);
-  part(boxGeo(0.052, 0.17 * k, 0.052), bone, 0, -0.29 * k, 0, legR);
-
-  finalize(root);
-  root.userData.anim = { head: headG, armL, armR, legL, legR, torso: root, walkPhase: 0 };
-  return root;
+  // 骷髅皮肤是 64×32：左右肢体共用一块 UV，手臂与腿也更细（slim）
+  return buildMcHumanoid('skeleton', { slim: true, limb64: false });
 }
 
 export function buildCreeper() {
-  const root = group('creeper');
-  const body = PALETTE.creeper;
-  const dark = PALETTE.creeperDark;
-
-  box(0.36, 0.64, 0.30, body, 0, 0.52, 0, root);
-  box(0.13, 0.19, 0.13, dark, -0.13, 0.62, 0.10, root);
-  box(0.11, 0.15, 0.11, dark, 0.15, 0.40, -0.08, root);
-
-  const headG = group('head');
-  headG.position.set(0, 1.02, 0);
-  root.add(headG);
-  box(0.36, 0.34, 0.36, body, 0, 0, 0, headG);
-  box(0.09, 0.09, 0.02, 0x0c120c, -0.095, 0.05, 0.19, headG);
-  box(0.09, 0.09, 0.02, 0x0c120c, 0.095, 0.05, 0.19, headG);
-  box(0.09, 0.15, 0.02, 0x0c120c, 0, -0.05, 0.19, headG);
-  box(0.075, 0.12, 0.02, 0x0c120c, -0.115, -0.085, 0.19, headG);
-  box(0.075, 0.12, 0.02, 0x0c120c, 0.115, -0.085, 0.19, headG);
-
-  const legs = [];
-  let li = 0;
-  for (const [sx, sz] of [[-0.115, -0.10], [0.115, -0.10], [-0.115, 0.10], [0.115, 0.10]]) {
-    const leg = group('leg' + li++);
-    leg.position.set(sx, 0.22, sz);
-    root.add(leg);
-    part(boxGeo(0.125, 0.27, 0.125), dark, 0, -0.085, 0, leg);
-    part(boxGeo(0.14, 0.05, 0.16), 0x3a4a30, 0, -0.23, 0.01, leg);
-    legs.push(leg);
-  }
-
-  finalize(root);
-  root.userData.anim = {
-    head: headG, armL: legs[0], armR: legs[1], legL: legs[2], legR: legs[3],
-    torso: root, walkPhase: 0, isCreeper: true
-  };
-  return root;
+  return buildMcCreeper('creeper');
 }
 
 export function buildSpider() {
-  const root = group('spider');
-  const body = PALETTE.spider;
-  const light = PALETTE.spiderLight;
+  return buildMcSpider('spider');
+}
 
-  box(0.50, 0.34, 0.62, body, 0, 0.30, -0.19, root);
-  box(0.17, 0.10, 0.21, light, 0, 0.36, -0.29, root);
-
-  const headG = group('head');
-  headG.position.set(0, 0.30, 0.18);
-  root.add(headG);
-  box(0.25, 0.19, 0.23, body, 0, 0, 0, headG);
-  box(0.05, 0.05, 0.03, 0xc02020, -0.07, 0.03, 0.125, headG);
-  box(0.05, 0.05, 0.03, 0xc02020, 0.07, 0.03, 0.125, headG);
-  box(0.03, 0.03, 0.03, 0xc02020, -0.125, 0.07, 0.105, headG);
-  box(0.03, 0.03, 0.03, 0xc02020, 0.125, 0.07, 0.105, headG);
-  box(0.05, 0.06, 0.08, 0x1a1018, -0.07, -0.06, 0.16, headG);
-  box(0.05, 0.06, 0.08, 0x1a1018, 0.07, -0.06, 0.16, headG);
-
-  const legs = [];
-  for (let i = 0; i < 4; i++) {
-    const z = -0.16 + i * 0.12;
-    for (const side of [-1, 1]) {
-      const leg = group('spiderLeg');
-      leg.position.set(side * 0.16, 0.28, z);
-      root.add(leg);
-      const u = part(boxGeo(0.055, 0.23, 0.055), body, side * 0.12, 0.02, 0, leg);
-      u.rotation.z = side * -0.9;
-      const l = part(boxGeo(0.044, 0.23, 0.044), body, side * 0.28, -0.12, 0, leg);
-      l.rotation.z = side * 0.35;
-      legs.push(leg);
-    }
-  }
-
-  finalize(root);
-  root.userData.anim = {
-    head: headG, armL: legs[0], armR: legs[1], legL: legs[2], legR: legs[3],
-    legs, torso: root, walkPhase: 0, isSpider: true
-  };
-  return root;
+/** 兼容旧签名：buildHumanoid({...}) 现在映射到 MC 人形 */
+export function buildHumanoid(opts = {}) {
+  return buildMcHumanoid(opts.skinName || 'zombie', {
+    slim: !!opts.slim,
+    limb64: opts.limb64 !== false
+  });
 }
 
 /* ---------------- 武器视模（不合并，保留金属/自发光材质） ----------------
@@ -415,13 +246,41 @@ export function buildWeaponView(kind = 'pistol') {
   const bw = (w, h, d, x, y, z, mat) => box(w, h, d, 0, x, y, z, root, mat);
 
   /* 方块手 —— Minecraft 第一人称手部表示。
-     之前所有武器都没有手，枪孤零零飘在画面右下角，无论怎么调比例
-     都读成"一把锤子"。加上方块手掌 + 前臂后，构图立刻成立。
-     gy/gz 是握把的 y/z，手掌比握把略大一圈把它包住，前臂竖直向下伸出画面。 */
-  const hand = (gy, gz, sc = 1) => {
-    bw(0.128 * sc, 0.112 * sc, 0.134 * sc, 0, gy, gz + 0.006, M.skin);              // 手掌
-    bw(0.124 * sc, 0.082 * sc, 0.140 * sc, 0, gy - 0.092 * sc, gz + 0.008, M.sleeve); // 袖口
-    bw(0.110 * sc, 0.46 * sc, 0.120 * sc, 0, gy - 0.360 * sc, gz + 0.012, M.skin);    // 前臂（伸出画面）
+     ============================================================
+     这个函数前后改错四次，把踩过的坑全部记在这里，别再重走：
+
+     ❌ 一：完全没有手 → 枪飘在右下角，怎么调比例都读成"锤子"。
+     ❌ 二：rotation.set(0, 0, Math.PI) → 上下颠倒，仍是一根**竖柱子**
+           从下方斜插进画面。
+     ❌ 三：rotation.x = -1.80（≈-103°）→ 方向对了，但几乎水平正对镜头，
+           看到的是 4×4 的**末端截面**，屏幕上是一大块糊在底部中央的色块。
+     ❌ 四：rotation.x = -1.45 + 偏移修正 → 还是不行。**根本原因不在角度，
+           在尺寸**：手臂几何是 12 MC 像素 = 0.75 米，乘 ARM_TO_BLOCK(1.111)
+           后是 0.83 米；放在离相机 0.55 米处，屏幕半高只有 0.55×tan36° = 0.40 米，
+           0.83 米的手臂**占屏高 2 倍**，必然贯满整个画面 —— 无论怎么转都是
+           一根巨大的青绿柱子（青色是 Steve 皮肤的袖子色）。
+
+     ✅ 正确做法（对齐 MC 原版 ItemInHandRenderer 的**构图**而非它的矩阵）：
+        MC 第一人称看到的是「右下角伸出的一小截前臂 + 手背 + 手中物品」。
+        要点是**手臂只露出很短一截**，不是整条 0.75 米都进画面：
+          · ARM_VISIBLE_SCALE = 0.42 → 可见部分只有 0.35 米，
+            在 0.55 米处占屏高约 44%，正好是 MC 里手臂的占比。
+          · 位置固定在**画面右下角**，不再从武器模型的握把坐标推导
+            （那套坐标是给枪用的，手臂跟着算必然错位）。
+          · X 轴 -1.30（≈-74°）：略向下前伸，能看到手背的长条面。
+          · Y 轴 -0.42：抵消 weaponRoot 自身的 +0.42 外偏，手臂正对屏幕。
+     ============================================================ */
+  const ARM_VISIBLE_SCALE = 0.42;
+  const hand = () => {
+    const arm = new THREE.Mesh(buildArmGeo('steve'), entityMaterial());
+    arm.scale.setScalar(ARM_TO_BLOCK * ARM_VISIBLE_SCALE);
+    arm.rotation.set(-1.30, -0.42, 0.10);
+    // 固定落点：右下角。x 正 → 右，y 负 → 下，z 负 → 前。
+    // 手臂中心放在这里，12 像素的臂长（缩到 0.35 米）会自然从画面下缘伸进来。
+    arm.position.set(0.105, -0.205, -0.075);
+    arm.castShadow = false;
+    arm.receiveShadow = false;
+    root.add(arm);
   };
 
   if (kind === 'shotgun') {
@@ -434,7 +293,7 @@ export function buildWeaponView(kind = 'pistol') {
     const g1 = bw(0.084, 0.146, 0.106, 0, -0.142, 0.100, M.woodD);   // 握把
     g1.rotation.x = -0.24;
     bw(0.018, 0.032, 0.024, 0, 0.088, -0.455, M.dark);   // 准星
-    hand(-0.176, 0.112);
+    hand();
     root.userData.muzzle = new THREE.Vector3(0, 0.042, -0.500);
   } else if (kind === 'pulse' || kind === 'redstone') {
     // 能量枪：暗色枪身 + 发光红石导轨 + 灼热枪口
@@ -446,7 +305,7 @@ export function buildWeaponView(kind = 'pistol') {
     bw(0.142, 0.054, 0.18, 0, 0.140, -0.060, M.redstone);            // 散热罩
     bw(0.044, 0.080, 0.14, -0.084, 0.026, -0.220, M.dark);           // 侧翼
     bw(0.044, 0.080, 0.14, 0.084, 0.026, -0.220, M.dark);
-    hand(-0.194, 0.060);
+    hand();
     root.userData.muzzle = new THREE.Vector3(0, 0.088, -0.512);
   } else if (kind === 'sniper' || kind === 'lapis') {
     // 狙击：长枪管 + 蓝宝石瞄准镜 + 木托
@@ -458,7 +317,7 @@ export function buildWeaponView(kind = 'pistol') {
     bw(0.032, 0.080, 0.09, 0, 0.080, -0.115, M.dark);    // 镜架
     const g3 = bw(0.086, 0.148, 0.106, 0, -0.142, 0.068, M.woodD);   // 握把
     g3.rotation.x = -0.28;
-    hand(-0.178, 0.078);
+    hand();
     root.userData.muzzle = new THREE.Vector3(0, 0.042, -0.552);
   } else if (kind === 'magma' || kind === 'lava') {
     // 熔岩枪：厚实枪身 + 灼热熔岩管 + 侧散热口
@@ -469,7 +328,7 @@ export function buildWeaponView(kind = 'pistol') {
     bw(0.094, 0.094, 0.07, 0, 0.042, -0.462, M.hot);     // 枪口
     bw(0.044, 0.064, 0.12, -0.092, 0.042, -0.165, M.dark);// 侧散热口
     bw(0.044, 0.064, 0.12, 0.092, 0.042, -0.165, M.dark);
-    hand(-0.200, 0.070);
+    hand();
     root.userData.muzzle = new THREE.Vector3(0, 0.042, -0.496);
   } else {
     // 手枪：亮银套筒 + 深灰机匣 + 深棕握把，三档明度拉开才读得出结构
@@ -482,7 +341,7 @@ export function buildWeaponView(kind = 'pistol') {
     bw(0.050, 0.022, 0.026, 0, 0.110, 0.012, M.dark);    // 照门
     bw(0.026, 0.048, 0.072, 0, -0.068, -0.014, M.dark);  // 扳机护圈
     bw(0.094, 0.022, 0.110, 0, -0.196, 0.030, M.dark);   // 弹匣底
-    hand(-0.152, 0.044);
+    hand();
     root.userData.muzzle = new THREE.Vector3(0, 0.028, -0.400);
   }
 
