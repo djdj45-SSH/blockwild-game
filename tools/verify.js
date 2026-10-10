@@ -275,18 +275,30 @@ ok(G.pickups.filter(p => p.kind === 'chest').length > 10, '地图上补给箱 = 
 console.log('[HITSCAN]');
 const G2 = PP.G;
 G2.enemies.length = 0; G2.projectiles.length = 0;
-// 找一块从玩家位置出发、3 格外且通视的空地（开放世界里不能假设正前方无遮挡）
+/* 找一块"同一海拔 + 3D 通视"的空地。
+   真 3D 下既不能假设正前方无遮挡，也不能假设对方和自己一样高 ——
+   用 rayVoxel 从眼睛位置实打实地打一发，通得过才算。 */
 let spot = null;
-for (let a = 0; a < 6.28 && !spot; a += 0.2) {
-  for (const d of [3, 4, 5]) {
-    const x = G2.player.x + Math.cos(a) * d, y = G2.player.y + Math.sin(a) * d;
-    if (!W.isWallTile(x | 0, y | 0) && W.losClear(G2.player.x, G2.player.y, x, y) && Math.abs(a - Math.PI / 2) > 0.5) { spot = { x: x, y: y, a: a }; break; }
+{
+  const eye = 1.62;
+  const oz = (G2.player.z || 0) + eye;
+  const cosP = 1;
+  for (let a = 0; a < 6.28 && !spot; a += 0.15) {
+    if (Math.abs(a - Math.PI / 2) < 0.5) continue;
+    for (const d of [3, 4, 5]) {
+      const x = G2.player.x + Math.cos(a) * d, y = G2.player.y + Math.sin(a) * d;
+      // 等高：目标格的可站立面必须与射手脚下同层（否则射线要么打地要么打空）
+      if (W.surfZAt(x, y) !== Math.round(G2.player.z || 0)) continue;
+      const hit = W.rayVoxel(G2.player.x, G2.player.y, oz, Math.cos(a), Math.sin(a), 0, d);
+      if (hit >= d - 1e-3) { spot = { x: x, y: y, a: a }; break; }
+    }
   }
 }
 ok(!!spot, '找到通视测试点');
 G2.player.pitch = 0; G2.player.pitchBase = 0; G2.player.kickPitch = 0;
 const z1 = PP.Ent.spawn(G2, 'zombie', spot.x, spot.y);
 z1.spawnT = 0;
+z1.z = W.surfZAt(spot.x, spot.y);   // 真 3D：敌人必须在同一海拔，否则射线从它头顶/脚下过去
 let hits = PP.Ent.hitscan(G2, G2.player, spot.a, 0, 0, 40, 1);
 ok(hits.length > 0 && hits[0].kind === 'enemy', '正前方敌人被命中');
 ok(hits.length && hits[0].head === false, '平视命中躯干');
@@ -314,6 +326,8 @@ ok(PP.Ent.hitscan(G2, G2.player, spot.a + Math.PI, 0, 0, 40, 1).length === 0, '�
     const g2 = PP.Sim.create(4242, { solo: true });
     const p2 = PP.Sim.addPlayer(g2, 9, 'M'); g2.me = p2;
     p2.x = PP.World.spawn.x; p2.y = PP.World.spawn.y; p2.a = 0;
+    // 真 3D：位置改了必须同步 z，否则第一帧 tickZ 判定为"从天而降"
+    p2.z = PP.World.surfZAt(p2.x, p2.y); p2.vz = 0; p2.onGround = true; p2.fallFrom = p2.z;
     const x0 = p2.x;
     for (let i = 0; i < 90; i++) {
       PP.Sim.setInput(g2, 9, { fwd: fwd, strafe: 0, sprint: sprint });
@@ -533,8 +547,9 @@ const sn = PP.Snap.decode(buf);
 ok(sn.players.length >= 1, '快照包含玩家 = ' + sn.players.length);
 ok(sn.enemies.length <= GM.enemies.length, '快照包含敌人 = ' + sn.enemies.length + '（AOI 裁剪后）');
 let roundtrip = true;
-for (const p of sn.players) { if (!isFinite(p.x) || !isFinite(p.y)) roundtrip = false; }
-ok(roundtrip, '快照坐标解码有效');
+for (const p of sn.players) { if (!isFinite(p.x) || !isFinite(p.y) || !isFinite(p.z)) roundtrip = false; }
+for (const e of sn.enemies) { if (!isFinite(e.z)) roundtrip = false; }
+ok(roundtrip, '快照坐标解码有效（含 z）');
 ok(sn.threat === GM.threat, '快照威胁等级一致');
 
 
@@ -542,39 +557,109 @@ ok(sn.threat === GM.threat, '快照威胁等级一致');
 console.log('[COLLISION]');
 {
   const W = PP.World;
-  // 复位一张小图
-  const S = W.SIZE;
-  for (let i = 0; i < S * S; i++) { W.wall[i] = 0; }
-  // 中心放一堵 1 格墙
-  const cx = 20, cy = 20;
-  W.wall[cy * S + cx] = 1;
+  /* ⚠️ 真 3D 后不能再去改 W.wall —— 它现在是从体素**派生**出来的只读快照，
+     改了它既不影响 vox（碰撞的真正依据），也会在下次 derive() 时被覆盖，
+     于是"测试通过/失败"完全取决于 derive 有没有被调用过（很不稳定）。
+     正确做法：直接改体素，再让 World.derive() 重新派生一次。 */
+  const S = W.SIZE, cx = 20, cy = 20;
+  const Z = W.surfZ[cy * S + cx];          // 原地形顶面
+  /* 在 Z 层再叠一块 → 该列变成 Z+1。
+     ⚠️ 只能叠 1 格！derive() 判定"可站立"要求**头顶还有 2 格净空**
+     （自下而上找第一个「脚下实心 + 自身与头顶都空」的 z）。
+     把整列填到 HEIGHT-1 会让 surfZ 直接变成 0（无站立面），
+     于是所有基于 z 的断言全部失去意义 —— 第一版就是这么写错的。 */
+  W.setBlock(cx, cy, Z, 1 /*STONE*/);
+  W.derive();
+  ok(W.surfZ[cy * S + cx] === Z + 1, '叠 1 格后该列 surfZ = ' + W.surfZ[cy * S + cx] + '（期望 ' + (Z + 1) + '）');
 
-  // 圆在墙内
-  ok(W.circleBlocked(cx + 0.5, cy + 0.5, 0.26) === true, '圆心在墙内应阻挡');
+  // 圆在墙内（站在墙里那一层）
+  ok(W.circleBlocked(cx + 0.5, cy + 0.5, 0.26, Z, 1.8) === true, '圆心在墙内应阻挡');
   // 圆完全在墙外
-  ok(W.circleBlocked(cx + 1.8, cy + 0.5, 0.26) === false, '圆在墙外应畅通');
-  // 贴墙但未重叠（圆心距墙 0.27，r=0.26）
-  ok(W.circleBlocked(cx + 1.0 + 0.27, cy + 0.5, 0.26) === false, '圆与墙相切外侧应畅通');
+  ok(W.circleBlocked(cx + 1.8, cy + 0.5, 0.26, Z, 1.8) === false, '圆在墙外应畅通');
+  // 贴墙但未重叠（圆心距墙面 0.27，r=0.26）
+  ok(W.circleBlocked(cx + 1.0 + 0.27, cy + 0.5, 0.26, Z, 1.8) === false, '圆与墙相切外侧应畅通');
   // 圆与墙轻微重叠
-  ok(W.circleBlocked(cx + 1.0 + 0.24, cy + 0.5, 0.26) === true, '圆与墙重叠应阻挡');
-  // 对角漏检旧算法场景：圆心在自由角，角部伸入墙
-  ok(W.circleBlocked(cx + 1.0 + 0.18, cy + 1.0 + 0.18, 0.26) === true, '对角伸入墙角应阻挡');
+  ok(W.circleBlocked(cx + 1.0 + 0.24, cy + 0.5, 0.26, Z, 1.8) === true, '圆与墙重叠应阻挡');
+  // 对角伸入墙角
+  ok(W.circleBlocked(cx + 1.0 + 0.18, cy + 1.0 + 0.18, 0.26, Z, 1.8) === true, '对角伸入墙角应阻挡');
+  // 站在墙上方那一层 → 不该被这堵墙挡（这一条才是真 3D 独有的）
+  ok(W.circleBlocked(cx + 0.5, cy + 0.5, 0.26, Z + 1, 1.8) === false, '站在墙顶不应被下方的墙阻挡');
 
-  // moveCircle 不应穿墙
-  const o = { x: cx + 1.8, y: cy + 0.5 };
+  /* moveCircle 不应穿墙（o.z 必须显式给，否则默认贴 surfZ 会走上墙顶）。
+     ⚠️ 这里必须给 onGround:false —— 贴地时 moveCircle 会自动上台阶，
+     1 格高的方块本来就会被合法地跨过去（那是"自动上台阶"那条测试用例的职责）。
+     这两条要测的是"水平堆叠不应隧穿"，所以先把攀爬关掉隔离。 */
+  const o = { x: cx + 1.8, y: cy + 0.5, z: Z, height: 1.8, radius: 0.26, onGround: false };
   W.moveCircle(o, -2, 0, 0.26);
   ok(o.x > cx + 1.0, '向墙推进不应穿到墙内 x=' + o.x.toFixed(2));
   ok(Math.abs(o.y - (cy + 0.5)) < 0.35, '轴分离应保持侧向贴墙滑动 y=' + o.y.toFixed(3));
 
-  // 大位移子步进
-  const o2 = { x: cx + 3.0, y: cy + 0.5 };
+  // 大位移子步进（同样关掉攀爬，只验隧道效应）
+  const o2 = { x: cx + 3.0, y: cy + 0.5, z: Z, height: 1.8, radius: 0.26, onGround: false };
   W.moveCircle(o2, -20, 0, 0.26);
   ok(o2.x > cx + 1.0, '超大位移不应穿墙 x=' + o2.x.toFixed(2));
 
+  /* 2 格高的墙不能靠上台阶翻过去（STEP_UP = 1 格）—— 这是"能跨台阶"
+     与"不能爬墙"之间的分界线，之前没有覆盖到。 */
+  W.setBlock(cx + 2, cy, Z, 1); W.setBlock(cx + 2, cy, Z + 1, 1);
+  W.derive();
+  const o5 = { x: cx + 2 + 1.4, y: cy + 0.5, z: Z, height: 1.8, radius: 0.26, onGround: true };
+  let z5 = o5.z;
+  for (let i = 0; i < 40; i++) { W.moveCircle(o5, -0.06, 0, 0.26); if (o5.z > z5) z5 = o5.z; }
+  ok(z5 < Z + 0.9, '2 格高的墙不能自动翻越（峰值 z=' + z5.toFixed(2) + '，期望停在 ' + Z + '）');
+
   // 卡墙脱困
-  const o3 = { x: cx + 0.5, y: cy + 0.5 };
+  const o3 = { x: cx + 0.5, y: cy + 0.5, z: Z, height: 1.8, radius: 0.26 };
   W.unstickCircle(o3, 0.26);
-  ok(!W.circleBlocked(o3.x, o3.y, 0.26), '卡墙后应能推出到自由位');
+  ok(!W.circleBlocked(o3.x, o3.y, 0.26, Z, 1.8), '卡墙后应能推出到自由位');
+
+  /* ---- 真 3D 新增：垂直物理 ----
+     ⚠️ 必须**手造**一块已知平地，不要去地图上随机地形里找。
+     ① 真 3D 地形有高差，随便挑个坐标很可能站在斜坡/洼地上，"跳高"会被
+        地形的高差污染（第一版把起点写在 cx+3.5，正好落在一处 3 格深洼地）；
+     ② 更不能去做"扫 surfZ 找 5×5 全平"—— 跑到这一段时世界已经被前面的
+        爆破测试炸过，找出来的平地形态取决于**测试执行顺序**，
+        曾经因此得到"跳高 3.09 格"这种荒谬结果，且换 seed 就翻脸。
+     这里把初始条件写死：在地图西北角圈一块 11×11，整列清空后再填到 TOP，
+     得到一块确凿无疑、不随测试顺序变化的平地。 */
+  const TOP = 10, FL = 24, FR = 34;
+  for (let y = FL; y <= FR; y++) for (let x = FL; x <= FR; x++) {
+    for (let z = 1; z < W.HEIGHT; z++) W.setBlock(x, y, z, 0);
+    for (let z = 0; z < TOP; z++) W.setBlock(x, y, z, 1 /*STONE*/);
+  }
+  W.derive();
+  const fmx = (FL + FR) >> 1, fmy = (FL + FR) >> 1;
+  ok(W.surfZ[fmy * S + fmx] === TOP, '手造平地 surfZ = ' + W.surfZ[fmy * S + fmx] + '（期望 ' + TOP + '）');
+  {
+    const px = fmx + 0.5, py = fmy + 0.5;
+    ok(W.supportZ(px, py, 0.26, TOP) === TOP, '平地脚下支撑面 = ' + W.supportZ(px, py, 0.26, TOP));
+    const jz = { x: px, y: py, z: TOP, height: 1.8, radius: 0.26, vz: 0, onGround: true, fallFrom: TOP };
+    ok(W.jump(jz) === true, '站立时可起跳');
+    ok(jz.vz > 0, '起跳给到正向上速度 vz=' + jz.vz.toFixed(2));
+    let peak = TOP;
+    for (let i = 0; i < 90; i++) { W.tickZ(jz, 1 / 30); peak = Math.max(peak, jz.z); }
+    // v=8.4 / g=26 → 理论顶点 1.357 格；欧拉积分一步一跳落到 1.22，属正常离散误差
+    const hgt = peak - TOP;
+    ok(hgt > 0.9 && hgt < 1.8, '跳高 ≈ 1.36 格（实测 ' + hgt.toFixed(2) + '）');
+    ok(jz.onGround && Math.abs(jz.z - TOP) < 0.02, '落回原地面 z=' + jz.z.toFixed(2));
+    // 空中二段跳必须无效（否则可以无限升高）
+    const air = { x: px, y: py, z: TOP + 1, height: 1.8, radius: 0.26, vz: -1, onGround: false };
+    ok(W.jump(air) === false, '空中不能二段跳');
+  }
+
+  /* 自动上台阶：moveCircle 撞到高出 1 格的邻居时应自动抬 z 跨上去。
+     在手造平地上垒一道 1 格高的矮墙，把自己的 step-up 条件写死。
+     ⚠️ 断言要看**过程中**出现过的最高 z，不能用末态 z —— 只有 1 格厚的墙，
+        走过去之后会立刻从另一侧下坡贴回原高度，末态一定是回到地面的。 */
+  for (let y = fmy - 1; y <= fmy + 1; y++) W.setBlock(fmx + 5, y, TOP, 1 /*STONE*/);
+  W.derive();
+  ok(W.surfZ[fmy * S + fmx + 5] === TOP + 1, '矮墙顶面 = ' + W.surfZ[fmy * S + fmx + 5] + '（期望 ' + (TOP + 1) + '）');
+  {
+    const o4 = { x: fmx + 5 + 1.4, y: fmy + 0.5, z: TOP, height: 1.8, radius: 0.26, onGround: true };
+    let maxZ = o4.z;
+    for (let i = 0; i < 60; i++) { W.moveCircle(o4, -0.06, 0, 0.26); if (o4.z > maxZ) maxZ = o4.z; }
+    ok(maxZ >= TOP + 0.9, '撞 1 格墙自动上台阶 → 峰值 z=' + maxZ.toFixed(2) + '（墙顶 ' + (TOP + 1) + '）');
+  }
 
   // 玩家-敌人互斥字段存在（逻辑在 sim tick，这里冒烟）
   ok(typeof PP.Ent.moveEntity === 'function', 'moveEntity 已导出');

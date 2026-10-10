@@ -77,7 +77,8 @@
     w.u16(ps.length);
     for (const p of ps) {
       w.u32(p.id);
-      w.f32(p.x); w.f32(p.y); w.f32(p.a); w.f32(p.pitch);
+      // z：真 3D 后队友可能站在山脊/坑底，不加 z 会在别人屏幕上贴地板飘
+      w.f32(p.x); w.f32(p.y); w.f32(p.z || 0); w.f32(p.a); w.f32(p.pitch);
       w.u8(Math.max(0, Math.min(255, Math.round(p.hp))));
       w.u8(Math.max(0, Math.min(255, Math.round(p.ap))));
       w.u8(p.weapon);
@@ -96,7 +97,7 @@
     for (const e of es) {
       w.u32(e.id);
       w.u8(Math.max(0, ENEMY_KEYS.indexOf(e.type)));
-      w.f32(e.x); w.f32(e.y);
+      w.f32(e.x); w.f32(e.y); w.f32(e.z || 0);
       w.u8(Math.max(0, Math.min(255, Math.round(e.hp / e.maxHp * 255))));
       let f = 0;
       if (e.state === 'dead') f |= EFLAG_DEAD;
@@ -127,7 +128,7 @@
     let n = r.u16();
     for (let i = 0; i < n; i++) {
       s.players.push({
-        id: r.u32(), x: r.f32(), y: r.f32(), a: r.f32(), pitch: r.f32(),
+        id: r.u32(), x: r.f32(), y: r.f32(), z: r.f32(), a: r.f32(), pitch: r.f32(),
         hp: r.u8(), ap: r.u8(), weapon: r.u8(), flags: r.u8(), level: r.u8()
       });
     }
@@ -135,7 +136,7 @@
     for (let i = 0; i < n; i++) {
       s.enemies.push({
         id: r.u32(), type: ENEMY_KEYS[r.u8()] || 'zombie',
-        x: r.f32(), y: r.f32(), hpPct: r.u8(), flags: r.u8()
+        x: r.f32(), y: r.f32(), z: r.f32(), hpPct: r.u8(), flags: r.u8()
       });
     }
     n = r.u16();

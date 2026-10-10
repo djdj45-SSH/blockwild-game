@@ -20,6 +20,17 @@ export { atlasUV, setAnisotropy, ATLAS_ORDER };
    约 30% 的镂空像素透出**后面的天空**。0.1 会让 mip 混合出的
    浅色半透明像素（alpha≈0.2）也通过测试，屏幕上就是"半透明的网"，
    网格反而更明显。0.5 把这一层滤掉，树冠立刻收紧。 */
+/* 树叶的"蓝白网格"收尾：贴图侧的 thin_leaf_alpha 已经把 8 条贯穿竖缝打断了，
+   但原版树叶本身还有 ~30% 的镂空像素 —— 远处一个方块只占几个像素时，
+   任何固定镂空图案都会压成规则点阵（蓝色天空从缝里透出来）。
+
+   Minecraft 原版靠"渐变距离剔除 + 更密的几何"掩盖它；这里用更省的做法：
+   **在远处把 alphaTest 的阈值抬上去**，让边缘像素被判为镂空而合并成实心块。
+   配合 already 有的雾，远处树冠会收成一个绿团。
+
+   实现：把阈值做成随相机距离变化的 —— 但这需要自定义 shader。
+   折中方案（零成本）：阈值取 0.5 不变，改为在 render3d 里
+   对树叶单独走一层"远处替换材质"。见 useLeafLOD()。 */
 let atlasMat = null;
 export function atlasMaterial() {
   if (atlasMat) return atlasMat;
@@ -33,7 +44,54 @@ export function atlasMaterial() {
     side: THREE.FrontSide
   });
   atlasMat.name = 'terrain';
+  applyLeafDither(atlasMat);
   return atlasMat;
+}
+
+/* ---- 镂空抖动（onBeforeCompile 注入） ----
+   治"远处树冠像蓝白网"的最后一刀。
+
+   原理：alphaTest 是**硬阈值**比较，镂空图案在远处被降采样后会规则地
+   重复 → 屏幕上是等距白点阵。给阈值叠一个**屏幕空间抖动**
+   （Bayer 矩阵，按 gl_FragCoord 取值）后，同样的镂空图案在相邻像素上
+   判定不同 → 点阵被打散成噪点 → 再经 mipmap 混合就是一层"叶隙的绒",
+   而不是"网格线"。
+
+   这是影视里 dither/ordered-dither 的老办法，比拉高阈值好：
+   拉高阈值会把近处的叶隙一起吃掉，树冠变成实心绿板。 */
+const BAYER_SRC = `
+  /* 4x4 有序抖动（Bayer）。用位交错公式算，避免 GLSL ES 1.0 里
+     数组 + 循环的兼容性坑（WebGL1 下 const 数组索引只能取常量）。 */
+  float bayer4(vec2 p){
+    vec2 c = mod(floor(p), 4.0);
+    float x = c.x, y = c.y;
+    float v = 0.0;
+    // 交错位：b = (x&1)*1 + (y&1)*2 + (x&2)*2 + (y&2)*4 ... 逐位累加
+    v += mod(floor(x * 0.5) + floor(y * 0.5) * 2.0, 2.0) * 8.0;
+    v += mod(floor(x * 0.25) + floor(y * 0.25) * 2.0, 2.0) * 4.0;
+    v += mod(x, 2.0) * 2.0;
+    v += mod(y, 2.0) * 1.0;
+    return (v + 0.5) / 16.0;
+  }
+`;
+function applyLeafDither(mat) {
+  if (mat.userData._leafDither) return;
+  mat.userData._leafDither = true;
+  const origCompile = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, renderer) => {
+    if (origCompile) origCompile(shader, renderer);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\n' + BAYER_SRC)
+      // alphaTest 的固定阈值 → 阈值叠一层屏幕空间抖动。
+      // 抖动幅度 ±0.06 是实测甜点：再大近处叶隙会开始掉像素。
+      .replace('#include <alphatest_fragment>', `
+        #ifdef USE_ALPHAMAP
+          diffuseColor.a *= texture2D( alphaMap, vAlphaMapUv ).g;
+        #endif
+        if ( diffuseColor.a < 0.5 + (bayer4(gl_FragCoord.xy) - 0.5) * 0.12 ) discard;
+      `);
+  };
+  mat.needsUpdate = true;
 }
 
 /* 独立纹理（武器 / 建筑这类需要各自 metalness / roughness 的物体） */
@@ -138,6 +196,122 @@ export const FLOOR_SKIN = {
   5: { map: 'water', color: 0x2f66c8 },
   6: { map: 'snow', color: 0xffffff }
 };
+
+/* ============================================================
+   体素方块材质表（v11 真 3D）
+
+   面编号与 sim 坐标的对应（渲染层 three.y = sim.z，勿改）：
+     PY = sim +z（顶面）  NY = sim -z（底面）
+     PX = sim +x   NX = sim -x   PZ = sim +y   NZ = sim -y
+
+   明暗照搬 Minecraft 的**固定面系数**（顶 1.0 / 南北 0.8 / 东西 0.6），
+   这是 MC 方块感的来源：不管光源在哪，方块六个面永远有这组固定差。
+   ⚠️ 填的是**线性值**（顶点色是线性空间，视觉比 = 线性^(1/2.4)）：
+     顶 1.22 / 南北 0.74 / 东西 0.42 —— 这组是上一轮美术调过的实测值。
+
+   ⚠️ 原版 grass_block_top / oak_leaves / water_still 存的是**灰度图**，
+   颜色由 biome color 在运行时乘上去（colormap）。直接贴是一片灰白，
+   **不是纹理坏了**。这里按 plains / desert / mountains / snowy 四档补色。
+   ============================================================ */
+export const F = { PX: 0, NX: 1, PY: 2, NY: 3, PZ: 4, NZ: 5 };
+const FACE_SHADE = [0.42, 0.42, 1.22, 0.30, 0.74, 0.74];
+export function faceShade(f) { return FACE_SHADE[f]; }
+
+/* kind：0 不透明 / 1 镂空（alphaTest）/ 2 半透明（水、玻璃） */
+export const K_OPAQUE = 0, K_CUTOUT = 1, K_BLEND = 2;
+
+/* 方块 id 必须与 src/sim/world.js 的 B 表一致（改表要同步两处） */
+export const BLOCK_DEF = {
+  1:  { s: 'stone' },                                              // STONE
+  2:  { s: 'grass_side', t: 'grass_top', b: 'dirt', biome: 0 },    // GRASS
+  3:  { s: 'dirt', t: 'dirt', b: 'dirt' },                         // DIRT
+  4:  { s: 'sand' },                                                // SAND
+  5:  { s: 'sandstone', t: 'sandstone', b: 'sandstone' },          // SANDSTONE
+  6:  { s: 'log_side', t: 'log_top', b: 'log_top' },               // LOG
+  7:  { s: 'leaves', kind: K_CUTOUT, biome: 1 },                   // LEAVES
+  8:  { s: 'plank' },                                               // PLANK
+  9:  { s: 'cobble' },                                              // COBBLE
+  10: { s: 'brick' },                                               // BRICK
+  11: { s: 'water', kind: K_BLEND, biome: 2 },                     // WATER
+  12: { s: 'bedrock' },                                             // BEDROCK
+  13: { s: 'glass', kind: K_CUTOUT },                               // GLASS
+  14: { s: 'cactus_side', t: 'cactus_top', b: 'cactus_top' },      // CACTUS
+  15: { s: 'redstone' },                                            // REDSTONE
+  16: { s: 'snow' },                                                // SNOW
+  17: { s: 'gravel' },                                              // GRAVEL
+  18: { s: 'mossy' },                                               // MOSSY
+  19: { s: 'obsidian' },                                            // OBSIDIAN
+  20: { s: 'iron' },                                                // IRON
+  21: { s: 'gold' },                                                // GOLD
+  22: { s: 'wool_red' }                                             // WOOL
+};
+
+/* biome 染色（plains / desert / mountains / snowy）—— 原版 colormap 的四档 */
+export const BIOME_TINT = [
+  [0x91bd59, 0xbfb755, 0x8ab689, 0x80b497],   // 0 = 草顶
+  [0x77ab2f, 0xaea42a, 0x77ab2f, 0x60a017],   // 1 = 树叶
+  [0x2f66c8, 0x2f66c8, 0x2f66c8, 0x2f66c8]    // 2 = 水
+];
+
+const _c = new THREE.Color();
+function srgbToLinear(hex) {
+  _c.setHex(hex, THREE.SRGBColorSpace);
+  return [_c.r, _c.g, _c.b];
+}
+
+/** 预计算：BLOCK_FACE[id * 6 + face] = { uv, ts:[r,g,b], kind, biome }
+ *  ⚠️ ts 是**已乘过面明暗**的线性三元组 —— 逐顶点再乘一次 shade 是纯浪费
+ *  （15 万个面 × 6 顶点 × 3 通道）。biome 方块（草/叶/水）的 ts 为 undefined，
+ *  走 BIOME_SHADED 表。 */
+let BLOCK_FACE = null;
+export function blockFaceTable() {
+  if (BLOCK_FACE) return BLOCK_FACE;
+  BLOCK_FACE = new Array(32 * 6);
+  for (const key of Object.keys(BLOCK_DEF)) {
+    const id = +key, d = BLOCK_DEF[key];
+    const kind = d.kind || K_OPAQUE;
+    for (let f = 0; f < 6; f++) {
+      const name = (f === F.PY && d.t) ? d.t : (f === F.NY && d.b) ? d.b : d.s;
+      const sh = FACE_SHADE[f];
+      const bTi = d.biome;
+      const ts = bTi === undefined
+        ? srgbToLinear(0xffffff).map(v => v * sh)
+        : null;                      // 染色方块按列取 BIOME_SHADED
+      BLOCK_FACE[id * 6 + f] = { uv: atlasUV(name), ts, kind, biome: bTi };
+    }
+  }
+  return BLOCK_FACE;
+}
+/** biome 色 × 面明暗：[slot][biomeIdx][face] = [r,g,b]（线性） */
+let BIOME_SHADED = null;
+export function biomeShaded() {
+  if (BIOME_SHADED) return BIOME_SHADED;
+  BIOME_SHADED = BIOME_TINT.map(row => row.map(hex => {
+    const lin = srgbToLinear(hex);
+    return FACE_SHADE.map(sh => [lin[0] * sh, lin[1] * sh, lin[2] * sh]);
+  }));
+  return BIOME_SHADED;
+}
+
+/** 半透明（水 / 玻璃）单独一份材质：transparent 不能和不透明共用一个 mesh，
+ *  否则深度排序会把水面画到地形前面去。 */
+let blendMat = null;
+export function blendMaterial() {
+  if (blendMat) return blendMat;
+  blendMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    map: atlasTexture(THREE),
+    vertexColors: true,
+    roughness: 0.22,
+    metalness: 0.0,
+    transparent: true,
+    opacity: 0.74,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+  blendMat.name = 'terrain-blend';
+  return blendMat;
+}
 
 /** 全局调色板（明亮卡通 / Minecraft 取向）
  *  约束：所有基色都要保证"受光面接近原色、背光面仍读得出形体"，

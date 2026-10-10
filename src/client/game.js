@@ -20,7 +20,7 @@
   let myId = 0, myName = '玩家';
 
   const input = {
-    fwd: 0, strafe: 0, turn: 0, pitch: 0, sprint: false,
+    fwd: 0, strafe: 0, turn: 0, pitch: 0, sprint: false, jump: false,
     fire: false, firePressed: false, revive: false, switchTo: -1, reload: false
   };
 
@@ -328,6 +328,7 @@
     if (pressed('turnL')) input.turn -= 2.2;
     if (pressed('turnR')) input.turn += 2.2;
     input.sprint = pressed('sprint');
+    input.jump = pressed('jump');
     input.fire = mouseDown;
     input.revive = pressed('revive');
     input.firePressed = pending.fire;

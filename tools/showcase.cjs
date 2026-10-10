@@ -50,33 +50,72 @@ fs.mkdirSync(OUT, { recursive: true });
       window.__simTickOrig = window.PP.Sim.tick;
       window.PP.Sim.tick = function () { };
     }
+    /* 真 3D 下"瞬移"必须连 z 一起改：只挪 x/y 会让玩家脚停在上一个
+       取景点的海拔，相机相对新地形要么埋进土里、要么飘在半空。
+       这里包一层 helper，所有场景统一调用。 */
+    window.__tp = function (p, x, y) {
+      p.x = x; p.y = y;
+      const W = window.PP.World;
+      p.z = W.surfZAt(x, y);
+      p.vz = 0; p.onGround = true; p.fallFrom = p.z;
+      return p.z;
+    };
   });
 
   // 找一个真正空旷的点：半径 5 全空，且某个方向 14 格内全空
   const spot = await page.evaluate(() => {
-    const W = window.PP.World, SIZE = W.SIZE, wall = W.wall;
-    const solid = (x, y) => (x < 1 || y < 1 || x >= SIZE - 1 || y >= SIZE - 1) ? true : wall[Math.floor(y) * SIZE + Math.floor(x)] !== 0;
-    const clearBox = (cx, cy, r) => {
-      for (let j = -r; j <= r; j++) for (let i = -r; i <= r; i++) if (solid(cx + i, cy + j)) return false;
+    const W = window.PP.World, SIZE = W.SIZE;
+    /* "空旷"的判据必须用**高差**而不是 wall 表。
+       真 3D 下 wall 是"该列有实心方块"，整张地图 100% 为真，
+       用它找空旷地会随机落到山顶/沙漠 —— 取景完全不可控。
+       这里改成：半径 5 内相邻格 surfZ 高差 ≤ 1（可站可走），
+       并且中间没有树干（树干会糊住镜头）。 */
+    const s = W.surfZ;
+    const flatClear = (cx, cy, r) => {
+      let base = s[cy * SIZE + cx];
+      if (!base) return false;
+      for (let j = -r; j <= r; j++) {
+        for (let i = -r; i <= r; i++) {
+          const x = cx + i, y = cy + j;
+          if (x < 1 || y < 1 || x >= SIZE - 1 || y >= SIZE - 1) return false;
+          const v = s[y * SIZE + x];
+          if (!v || Math.abs(v - base) > 1) return false;
+        }
+      }
       return true;
     };
-    const dirOf = (cx, cy, ang) => {
+    // 前方 16 格内不能有高于脚下 2 格的地形（否则镜头贴着一面土墙）
+    const openDir = (cx, cy, ang) => {
+      const base = s[cy * SIZE + cx];
       for (let d = 1; d <= 16; d++) {
-        if (solid(cx + Math.cos(ang) * d, cy + Math.sin(ang) * d)) return d;
+        const x = Math.floor(cx + Math.cos(ang) * d), y = Math.floor(cy + Math.sin(ang) * d);
+        if (x < 1 || y < 1 || x >= SIZE - 1 || y >= SIZE - 1) return d;
+        const v = s[y * SIZE + x];
+        if (!v || v > base + 2) return d;
       }
       return 16;
     };
+    // 优先草地（floor=0），海拔靠近中位（取景海拔太高会一片灰岩石）
+    const zs = [];
+    for (let i = 0; i < SIZE * SIZE; i += 13) if (s[i]) zs.push(s[i]);
+    zs.sort((a, b) => a - b);
+    const midZ = zs[(zs.length * 0.5) | 0];
     let best = null;
-    for (let y = 8; y < SIZE - 8; y += 2) {
-      for (let x = 8; x < SIZE - 8; x += 2) {
-        if (!clearBox(x, y, 5)) continue;
+    for (let y = 10; y < SIZE - 10; y += 2) {
+      for (let x = 10; x < SIZE - 10; x += 2) {
+        if (!flatClear(x, y, 5)) continue;
         let bestAng = 0, bestD = 0;
         for (let k = 0; k < 16; k++) {
           const ang = k * Math.PI / 8;
-          const d = dirOf(x, y, ang);
+          const d = openDir(x, y, ang);
           if (d > bestD) { bestD = d; bestAng = ang; }
         }
-        if (!best || bestD > best.d) best = { x: x + 0.5, y: y + 0.5, ang: bestAng, d: bestD };
+        const isGrass = (W.floor[y * SIZE + x] || 0) === 0 ? 1 : 0;
+        const zPen = Math.abs(s[y * SIZE + x] - midZ);
+        const score = bestD * 10 + isGrass * 25 - zPen * 3;
+        if (!best || score > best.score) {
+          best = { x: x + 0.5, y: y + 0.5, ang: bestAng, d: bestD, score: score };
+        }
       }
     }
     return best || { x: SIZE / 2, y: SIZE / 2, ang: 0, d: 6 };
@@ -85,7 +124,8 @@ fs.mkdirSync(OUT, { recursive: true });
   // A: 清场 + 在面前一字排开 5 种怪
   await page.evaluate((s) => {
     const G = window.PP.G;
-    G.player.x = s.x; G.player.y = s.y; G.player.pitch = 0.05; G.player.pitchBase = 0.05;
+    window.__tp(G.player, s.x, s.y);
+    G.player.pitch = 0.05; G.player.pitchBase = 0.05;
     G.player.a = s.ang;
     const dx = Math.cos(s.ang), dy = Math.sin(s.ang);
     const ux = -dy, uy = dx;                       // 侧向单位向量
@@ -131,7 +171,7 @@ fs.mkdirSync(OUT, { recursive: true });
           if (TREE.has(typeAt(qx, qy))) { blocked = true; break; }
         }
         if (blocked) continue;
-        G.player.x = px; G.player.y = py;
+        window.__tp(G.player, px, py);
         G.player.a = Math.atan2(p.y - py, p.x - px);
         G.player.pitch = 0.06; G.player.pitchBase = 0.06;
         return { type: t, x: p.x, y: p.y };
@@ -168,7 +208,8 @@ fs.mkdirSync(OUT, { recursive: true });
   //    （默认太阳在右后上方，影子全落在镜头背后，取景里根本无法发现"有没有影子"）
   await page.evaluate((s) => {
     const G = window.PP.G, R = window.PP.Render;
-    G.player.x = s.x; G.player.y = s.y; G.player.a = s.ang;
+    window.__tp(G.player, s.x, s.y);
+    G.player.a = s.ang;
     G.player.pitch = -0.18; G.player.pitchBase = -0.18;
     R.sunOffset.set(-Math.cos(s.ang) * 30, 17, -Math.sin(s.ang) * 30);
   }, spot);
@@ -188,6 +229,58 @@ fs.mkdirSync(OUT, { recursive: true });
   });
   await page.waitForTimeout(900);
   await page.screenshot({ path: path.join(OUT, `${TAG}-g-dark.png`) });
+
+  /* H: 远景俯瞰 —— 真 3D 改造的核心卖点（此前的世界是 2.5D 单层，
+        再怎么拍都只有"一堵墙 + 一片地"）。这里找一处**落差最大**的崖边，
+        站在高处往低处看，让山脊 / 崖壁 / 谷底 / 远处树线全部进画。 */
+  const vista = await page.evaluate(() => {
+    const W = window.PP.World, G = window.PP.G, R = window.PP.Render;
+    const S = W.SIZE;
+    const H = W.HEIGHT || 40;
+    // 恢复环境光（G 场景把它们压掉了）
+    R._scene().traverse((o) => {
+      if (o.isAmbientLight) o.intensity = 0.30;
+      if (o.isHemisphereLight) o.intensity = 0.34;
+    });
+    if ('environmentIntensity' in R._scene()) R._scene().environmentIntensity = 0.22;
+    R.sunOffset.set(26, 30, 14);
+
+    // 在中心区域找一个"朝某方向 14 格内落差 ≥ 6 格"的高点
+    let best = null;
+    for (let y = 40; y < S - 40; y += 2) {
+      for (let x = 40; x < S - 40; x += 2) {
+        const z0 = W.surfZ[y * S + x];
+        if (!z0 || z0 < 12) continue;
+        for (let k = 0; k < 16; k++) {
+          const a = k * Math.PI / 8;
+          const qx = (x + Math.cos(a) * 14) | 0, qy = (y + Math.sin(a) * 14) | 0;
+          const z1 = W.surfZ[qy * S + qx];
+          if (!z1) continue;
+          const drop = z0 - z1;
+          if (drop < 6) continue;
+          // 沿途不能有树/岩石糊住视线
+          let blocked = 0;
+          for (let d = 1; d <= 13; d++) {
+            const px = (x + Math.cos(a) * d) | 0, py = (y + Math.sin(a) * d) | 0;
+            for (let zz = z0; zz < Math.min(z0 + 3, H); zz++) {
+              if (W.SOLID[W.getBlock(px, py, zz)] === 1) { blocked++; break; }
+            }
+          }
+          if (blocked > 5) continue;
+          if (!best || drop > best.drop) best = { x: x + 0.5, y: y + 0.5, a: a, drop: drop };
+        }
+      }
+    }
+    if (!best) return null;
+    window.__tp(G.player, best.x, best.y);
+    G.player.a = best.a;
+    G.player.pitch = -0.34; G.player.pitchBase = -0.34;
+    G.enemies.length = 0;
+    return best;
+  });
+  await page.waitForTimeout(1200);
+  await page.screenshot({ path: path.join(OUT, `${TAG}-h-vista.png`) });
+  console.log('vista', vista ? JSON.stringify({ x: +vista.x.toFixed(1), y: +vista.y.toFixed(1), drop: vista.drop }) : 'null');
 
   const st = await page.evaluate((s) => {
     const W = window.PP.World, G = window.PP.G;

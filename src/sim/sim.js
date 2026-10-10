@@ -33,8 +33,12 @@
       combo: 0, comboT: 0, bestCombo: 0,
       viewShake: 0, viewOffsetY: 0, hurtFlash: 0,
       weaponSwayX: 0, weaponBobY: 0,
-      input: { fwd: 0, strafe: 0, turn: 0, pitch: 0, sprint: false, fire: false, firePressed: false, revive: false, switchTo: -1, reload: false }
+      input: { fwd: 0, strafe: 0, turn: 0, pitch: 0, sprint: false, jump: false, fire: false, firePressed: false, revive: false, switchTo: -1, reload: false }
     };
+    /* z 轴物理初值（真 3D）：出生在地表站立面上。
+       不初始化会导致第一帧 tickZ 把玩家从 z=undefined 硬拉到地表 → 巨大坠落伤害。 */
+    p.z = (PP.World.surfZAt ? PP.World.surfZAt(p.x, p.y) : 1);
+    p.vz = 0; p.onGround = true; p.inWater = false; p.fallFrom = p.z;
     p.comboMult = function () { return Math.min(4, 1 + Math.floor(p.combo / 4) * 0.5); };
     p.registerCombo = function () {
       p.combo++; p.comboT = 3.2;
@@ -412,7 +416,7 @@
     if (mag > 1) { fwd /= mag; strafe /= mag; }
     // 疾跑只对"向前/侧向"生效：后退不能冲刺，否则纯后退放风筝零风险
     const backing = fwd < -0.1;
-    const inWater = PP.World.inWater(p.x, p.y);
+    const inWater = !!p.inWater;
     const sprintMul = (inp.sprint && !backing) ? (1.5 + (p.mods.sprint || 0)) : 1;
     const st = p.wStats();
     const speed = 3.3 * sprintMul * (backing ? 0.72 : 1) * (inWater ? 0.6 : 1) * crawl *
@@ -425,6 +429,18 @@
     else {
       if (!PP.World.circleBlocked(p.x + vx * dt, p.y, r)) p.x += vx * dt;
       if (!PP.World.circleBlocked(p.x, p.y + vy * dt, r)) p.y += vy * dt;
+    }
+    /* 垂直物理（真 3D）。顺序必须是「水平 → 起跳 → 重力」：
+       jump 依赖上一帧 tickZ 留下的 onGround，tickZ 再刷新它。 */
+    if (PP.World.tickZ) {
+      if (inp.jump && !p.downed && PP.World.jump) PP.World.jump(p);
+      const fell = PP.World.tickZ(p, dt);
+      const safe = PP.World.FALL_SAFE || 4.5;
+      if (fell > safe && p.hp > 0) {
+        const dmg = (fell - safe) * 6;
+        if (typeof Sim.damage === 'function') Sim.damage(G, p, dmg, null, 'fall');
+        else p.hp = Math.max(0, p.hp - dmg);
+      }
     }
     p.speed = Math.hypot(vx, vy);
     p.bobT += dt * (6 + p.speed * 1.7);
@@ -525,7 +541,7 @@
     if (inp.turn) p.a += inp.turn * dt;
     if (inp.pitch) p.pitchBase = Core().clamp(p.pitchBase + inp.pitch * dt, -1.30, 1.30);
     p.pitch = p.pitchBase + (p.kickPitch || 0);
-    const inWater = PP.World.inWater(p.x, p.y);
+    const inWater = !!p.inWater;
     // 与 updatePlayer 同规则：后退不能冲刺
     const backing = fwd < -0.1;
     const sprintMul = (inp.sprint && !backing) ? (1.5 + ((mods || {}).sprint || 0)) : 1;
@@ -543,6 +559,7 @@
       if (!PP.World.circleBlocked(p.x + vx * dt, p.y, r)) p.x += vx * dt;
       if (!PP.World.circleBlocked(p.x, p.y + vy * dt, r)) p.y += vy * dt;
     }
+    if (PP.World.tickZ) PP.World.tickZ(p, dt);
     p.speed = Math.hypot(vx, vy);
   };
 

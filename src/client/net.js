@@ -190,10 +190,10 @@
       seen.add(p.id);
       let m = mateById.get(p.id);
       if (!m) {
-        m = { id: p.id, name: p.name || ('P' + p.id), x: p.x, y: p.y, a: p.a, pitch: p.pitch, hp: p.hp, downed: false, colorIdx: p.id % 4, fireT: 0 };
+        m = { id: p.id, name: p.name || ('P' + p.id), x: p.x, y: p.y, z: p.z, a: p.a, pitch: p.pitch, hp: p.hp, downed: false, colorIdx: p.id % 4, fireT: 0 };
         mateById.set(p.id, m); V.mates.push(m);
       }
-      m.tx = p.x; m.ty = p.y; m.ta = p.a; m.tpitch = p.pitch;
+      m.tx = p.x; m.ty = p.y; m.tz = p.z; m.ta = p.a; m.tpitch = p.pitch;
       m.hp = p.hp; m.level = p.level;
       m.downed = !!(p.flags & PP.Snap.FLAG.DOWNED);
       m.eliminated = !!(p.flags & PP.Snap.FLAG.ELIM);
@@ -211,13 +211,13 @@
       if (!o) {
         const T = PP.Ent.TYPES[e.type];
         o = {
-          id: e.id, type: e.type, T: T, x: e.x, y: e.y, z0: T.z0, height: T.height,
+          id: e.id, type: e.type, T: T, x: e.x, y: e.y, z: e.z, height: T.height,
           radius: T.radius, state: 'alive', hp: T.hp, maxHp: T.hp,
           hurt: 0, windup: 0, spawnT: 0, anim: 0, deadT: 0
         };
         enemyById.set(e.id, o); V.enemies.push(o);
       }
-      o.tx = e.x; o.ty = e.y;
+      o.tx = e.x; o.ty = e.y; o.tz = e.z;
       o.hp = Math.max(0, e.hpPct / 255 * o.maxHp);
       const dead = !!(e.flags & PP.Snap.EFLAG.DEAD);
       if (dead && o.state !== 'dead') { o.state = 'dead'; o.deadT = 0; }
@@ -264,8 +264,13 @@
     if (s) {
       const dx = s.x - p.x, dy = s.y - p.y;
       const d = Math.hypot(dx, dy);
-      if (d > 1.5) { p.x = s.x; p.y = s.y; }
+      if (d > 1.5) { p.x = s.x; p.y = s.y; p.z = s.z; }
       else if (d > 0.001) { const k = Math.min(1, dt * (d > 0.6 ? 14 : 7)); p.x += dx * k; p.y += dy * k; }
+      /* z 不走位置插值 —— 水平位置平滑是为了掩盖网络抖动，
+         而 z 是"脚下踩在哪"，插值会让玩家在半空中缓慢下沉，
+         手感非常糟。改成：水平对齐后直接吸附服务端的 z（误差 < 1 格时）。 */
+      if (Math.abs(s.z - p.z) <= 1.05) p.z = s.z;
+      else if (Math.abs(s.z - p.z) > 3) p.z = s.z;
     }
 
     // 队友平滑
@@ -273,6 +278,7 @@
       if (m.tx === undefined) continue;
       const k = Math.min(1, dt * 14);
       m.x += (m.tx - m.x) * k; m.y += (m.ty - m.y) * k;
+      m.z = m.tz;                                  // z 直通，理由同上
       m.a = m.ta; m.pitch = m.tpitch;
       if (m.fireT > 0) m.fireT -= dt;
     }
@@ -281,6 +287,7 @@
       if (e.tx === undefined) continue;
       const k = Math.min(1, dt * 14);
       e.x += (e.tx - e.x) * k; e.y += (e.ty - e.y) * k;
+      e.z = e.tz;
       e.anim += dt;
       if (e.hurt > 0) e.hurt -= dt;
       if (e.state === 'dead') e.deadT += dt;

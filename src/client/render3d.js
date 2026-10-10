@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import {
   makeLambert, atlasMaterial, atlasUV, setAnisotropy,
-  WALL_SKIN, FLOOR_SKIN
+  blockFaceTable, biomeShaded, blendMaterial, K_BLEND
 } from '../three/materials.js';
 import { preloadAtlas, atlasReady } from '../three/textures.js';
 import { preloadEntityAtlas, entityReady } from '../three/mcModel.js';
@@ -15,7 +15,6 @@ import {
   buildPlayer, buildEnemy, buildWeaponView, buildPickup,
   buildBoneProjectile, animateHumanoid, animateSpider, disposeObject
 } from '../three/models.js';
-import { buildArchitecture } from '../three/architecture.js';
 
 (function () {
   const ROOT = (typeof window !== 'undefined') ? window : globalThis;
@@ -29,7 +28,9 @@ import { buildArchitecture } from '../three/architecture.js';
   const FOV = 72;
   const NEAR = 0.06;
   const FAR = 120;
-  const CHUNK = 32;          // 地形分块边长（格）
+  // 体素世界每个 chunk 是 CHUNK×CHUNK×HEIGHT，边长给 32 会让单个 mesh
+  // 装下上万个面、视锥剔除粒度太粗；给 16 → 12×12 = 144 块，剔除更细。
+  const CHUNK = 16;          // 地形分块边长（格）
   // 雾密度：明亮卡通要"看得远"。太浓会让远景糊成一片灰，
   // 与天空的明亮蓝白形成"阴天"错觉（这是美术统一前的实际观感）。
   // Minecraft 的雾很"远"：默认渲染距离内几乎看不出雾，远方才淡淡地化进天空色。
@@ -501,11 +502,61 @@ import { buildArchitecture } from '../three/architecture.js';
     return g;
   }
 
+  /* ---------------- 体素地形：分块网格 ----------------
+     sim 坐标 (x, y, z)：x/y 水平，z 高度；three 位置 = (x, z, y)。
+     下面两张表是"世界看不见"的命门，改前先读血泪结论第 2 条：
+       缠绕顺序写反 → 被背面剔除 → 整个地面/墙顶消失，只剩灰白虚空。
+
+     FV[f][v]  = 第 f 面第 v 个顶点相对体素最小角的偏移 [dx, dz, dy]
+                 （dz 是高度：0 = 方块底、1 = 方块顶）
+     FN3[f]    = 该面在 three 空间的法线
+     FAO[f][v] = 该顶点角的三个 AO 采样偏移 [side1, side2, corner]
+                 —— Minecraft 的 smooth lighting：贴墙的角压暗，
+                 没有它所有方块都像"浮在地上"，画面立刻发平。 */
+  const FD = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]];
+  const FT1 = [[0, 1, 0], [0, 1, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0]];
+  const FT2 = [[0, 0, 1], [0, 0, 1], [0, 1, 0], [0, 1, 0], [0, 0, 1], [0, 0, 1]];
+  const FSIGN = [
+    [[1, -1], [-1, -1], [-1, 1], [1, 1]],   // PX
+    [[-1, -1], [1, -1], [1, 1], [-1, 1]],   // NX
+    [[-1, -1], [-1, 1], [1, 1], [1, -1]],   // PY
+    [[-1, -1], [1, -1], [1, 1], [-1, 1]],   // NY
+    [[-1, -1], [1, -1], [1, 1], [-1, 1]],   // PZ
+    [[1, -1], [-1, -1], [-1, 1], [1, 1]]    // NZ
+  ];
+  const FV = [
+    [[1, 0, 1], [1, 0, 0], [1, 1, 0], [1, 1, 1]],   // PX
+    [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]],   // NX
+    [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]],   // PY
+    [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]],   // NY
+    [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],   // PZ
+    [[1, 0, 0], [0, 0, 0], [0, 1, 0], [1, 1, 0]]    // NZ
+  ];
+  const FN3 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  const FAO = [];
+  for (let f = 0; f < 6; f++) {
+    const d = FD[f], t1 = FT1[f], t2 = FT2[f], row = [];
+    for (let v = 0; v < 4; v++) {
+      const s = FSIGN[f][v];
+      row.push([
+        [d[0] + s[0] * t1[0], d[1] + s[0] * t1[1], d[2] + s[0] * t1[2]],
+        [d[0] + s[1] * t2[0], d[1] + s[1] * t2[1], d[2] + s[1] * t2[2]],
+        [d[0] + s[0] * t1[0] + s[1] * t2[0], d[1] + s[0] * t1[1] + s[1] * t2[1], d[2] + s[0] * t1[2] + s[1] * t2[2]]
+      ]);
+    }
+    FAO.push(row);
+  }
+  /* AO 亮度（线性）：3 = 完全开阔 … 0 = 内角。
+     ⚠️ 顶点色是线性空间，0.7 这种值屏幕上只暗 13%（k ≈ 视觉比^2.4）。 */
+  const AO_LUT = [0.34, 0.52, 0.75, 1.0];
+
+  const VSEQ = [0, 1, 2, 0, 2, 3];
+
   function buildWorld(G) {
     const Wd = PP.World;
-    if (!Wd || !Wd.wall) return;
-    // 种子必须进 key：否则重开一局换了 seed 却复用上一局的地形（穿模）
-    const key = `${Wd.SIZE}|${Wd.seed}|${Wd.pois ? Wd.pois.length : 0}|${Wd._stamp || 0}`;
+    if (!Wd || !Wd.vox) return;
+    // 种子必须进 key：否则重开一局换了 seed 却复用上一局地形（穿模）
+    const key = `${Wd.SIZE}|${Wd.seed}|${Wd._stamp || 0}`;
     if (worldBuilt && lastWorldKey === key) return;
     lastWorldKey = key;
 
@@ -513,128 +564,130 @@ import { buildArchitecture } from '../three/architecture.js';
     chunks.length = 0;
     worldBuilt = true;
 
-    const SIZE = Wd.SIZE;
-    const wall = Wd.wall;
-    const floor = Wd.floor;
+    const SIZE = Wd.SIZE, HEIGHT = Wd.HEIGHT;
+    const vox = Wd.vox, biomeArr = Wd.biome;
+    const WATER = 11;
+    const FT = blockFaceTable();
+    const BS = biomeShaded();
     const mat = atlasMaterial();
+    const bmat = blendMaterial();
+    const N2 = SIZE * SIZE;
 
-    const solidAt = (x, z) => (x < 0 || z < 0 || x >= SIZE || z >= SIZE) ? true : wall[z * SIZE + x] !== 0;
+    /* 最高非空层：省掉上方整片空气的遍历（世界 40 层，实际只用到 ~32） */
+    let topZ = 1;
+    for (let z = HEIGHT - 1; z >= 0; z--) {
+      const b = z * N2;
+      for (let i = 0; i < N2; i++) if (vox[b + i]) { topZ = z + 1; break; }
+      if (topZ > 1) break;
+    }
 
-    const N = Math.ceil(SIZE / CHUNK);
-    for (let cz = 0; cz < N; cz++) {
-      for (let cx = 0; cx < N; cx++) {
-        const x0 = cx * CHUNK, z0 = cz * CHUNK;
-        const x1 = Math.min(SIZE, x0 + CHUNK), z1 = Math.min(SIZE, z0 + CHUNK);
+    const NC = Math.ceil(SIZE / CHUNK);
+    for (let cz = 0; cz < NC; cz++) {
+      for (let cx = 0; cx < NC; cx++) {
+        const x0 = cx * CHUNK, y0 = cz * CHUNK;
+        const x1 = Math.min(SIZE, x0 + CHUNK), y1 = Math.min(SIZE, y0 + CHUNK);
+        const oP = [], oN = [], oU = [], oC = [];   // 不透明 + 镂空（树叶/玻璃）
+        const bP = [], bN = [], bU = [], bC = [];   // 半透明（水）
 
-        const fP = [], fN = [], fU = [], fC = [];
-        const wP = [], wN = [], wU = [], wC = [];
+        for (let z = 0; z < topZ; z++) {
+          const zb = z * N2;
+          for (let sy = y0; sy < y1; sy++) {
+            const yb = zb + sy * SIZE;
+            const bi = biomeArr ? biomeArr[sy * SIZE + x0] : 0;
+            for (let sx = x0; sx < x1; sx++) {
+              const id = vox[yb + sx];
+              if (!id) continue;
 
-        for (let z = z0; z < z1; z++) {
-          for (let x = x0; x < x1; x++) {
-            const i = z * SIZE + x;
-            const wt = wall[i];
-            if (wt) {
-              const h = wallHeight(wt);
-              const skin = WALL_SKIN[wt] || WALL_SKIN[1];
-              // 顶面 / 侧面可以是不同贴图（原木、仙人掌在 Minecraft 里就是这样）
-              const uvS = atlasUVC(skin.map || 'stone');
-              const uvT = skin.top ? atlasUVC(skin.top) : uvS;
-              const nX = solidAt(x + 1, z), pX = solidAt(x - 1, z);
-              const nZ = solidAt(x, z + 1), pZ = solidAt(x, z - 1);
-              const buried = nX && pX && nZ && pZ;
-              // 各面明度差照搬 Minecraft 的固定系数表：顶 1.0 / 南北 0.8 / 东西 0.6。
-              // MC 不用真实光照算面亮度，而是硬编码这几个系数 —— 正是这张表让它的
-              // 方块有"稳定、干净、一眼认得出"的立体感，而不是随太阳角度乱变。
-              // 顶点色在线性空间，所以填的是 visual^2.4：1.26 / 0.77 / 0.40
-              if (!buried) {
-                const wh = ((x * 73856093) ^ (z * 19349663)) & 255;
-                pushTop(wP, wN, wU, wC, x, h, z, x + 1, z + 1, uvT,
-                  tintOf(skin.color, 1.20 + (wh / 255) * 0.12));
+              /* 水方块高度是 14/16（原版），顶面降 1/8 格 —— 没有这一步
+                 湖岸就没有那条浅色边，水面看着像"盖在草地上的蓝板"。 */
+              const top = (id === WATER) ? z + 0.875 : z + 1;
+
+              for (let f = 0; f < 6; f++) {
+                const d = FD[f];
+                const nx = sx + d[0], ny = sy + d[1], nz = z + d[2];
+                let nb = 0;
+                if (nz >= 0 && nz < HEIGHT && nx >= 0 && ny >= 0 && nx < SIZE && ny < SIZE) {
+                  nb = vox[nz * N2 + ny * SIZE + nx];
+                } else if (nz < 0) {
+                  nb = 1;                                // 基岩之下 = 实心
+                }
+                // 邻居遮挡 → 这一面埋在里面，不必生成
+                if (nb !== 0 && !(nb === WATER && id !== WATER)) continue;
+
+                const bf = FT[id * 6 + f];
+                if (!bf) continue;
+                const isBlend = bf.kind === K_BLEND;
+                const P = isBlend ? bP : oP, NN = isBlend ? bN : oN;
+                const UU = isBlend ? bU : oU, CC = isBlend ? bC : oC;
+                const ts = (bf.biome === undefined) ? bf.ts : BS[bf.biome][biomeArr ? biomeArr[sy * SIZE + sx] : 0][f];
+                const uv = bf.uv;
+                const u0 = uv[0], v0 = uv[1], u1 = uv[2], v1 = uv[3];
+
+                /* 四角 AO：贴墙的那个角压暗。地面占画面一半，这是"发平"最直接的解药。 */
+                const aoR = FAO[f];
+                let a0 = 1, a1 = 1, a2 = 1, a3 = 1;
+                for (let v = 0; v < 4; v++) {
+                  const o = aoR[v];
+                  let s1 = 0, s2 = 0, cn = 0;
+                  for (let k = 0; k < 3; k++) {
+                    const oi = o[k];
+                    const px = sx + oi[0], py = sy + oi[1], pz = z + oi[2];
+                    let occ = 1;
+                    if (pz >= 0 && pz < HEIGHT && px >= 0 && py >= 0 && px < SIZE && py < SIZE) {
+                      const b2 = vox[pz * N2 + py * SIZE + px];
+                      occ = (b2 !== 0 && b2 !== WATER) ? 1 : 0;
+                    }
+                    if (k === 0) s1 = occ; else if (k === 1) s2 = occ; else cn = occ;
+                  }
+                  const av = AO_LUT[(s1 && s2) ? 0 : 3 - (s1 + s2 + cn)];
+                  if (v === 0) a0 = av; else if (v === 1) a1 = av; else if (v === 2) a2 = av; else a3 = av;
+                }
+                const aoV = [a0, a1, a2, a0, a2, a3];
+
+                const fnv = FN3[f];
+                for (let s = 0; s < 6; s++) {
+                  const vi = VSEQ[s];
+                  const c = FV[f][vi];
+                  P.push(sx + c[0], c[1] ? top : z, sy + c[2]);
+                  NN.push(fnv[0], fnv[1], fnv[2]);
+                  if (s === 0) UU.push(u0, v0);
+                  else if (s === 1) UU.push(u1, v0);
+                  else if (s === 2) UU.push(u1, v1);
+                  else if (s === 3) UU.push(u0, v0);
+                  else if (s === 4) UU.push(u1, v1);
+                  else UU.push(u0, v1);
+                  const m = aoV[s];
+                  CC.push(ts[0] * m, ts[1] * m, ts[2] * m);
+                }
               }
-              if (!nX) pushSide(wP, wN, wU, wC, '+x', x, z, x + 1, z + 1, 0, h, uvS, tintOf(skin.color, 0.42));
-              if (!pX) pushSide(wP, wN, wU, wC, '-x', x, z, x + 1, z + 1, 0, h, uvS, tintOf(skin.color, 0.38));
-              if (!nZ) pushSide(wP, wN, wU, wC, '+z', x, z, x + 1, z + 1, 0, h, uvS, tintOf(skin.color, 0.80));
-              if (!pZ) pushSide(wP, wN, wU, wC, '-z', x, z, x + 1, z + 1, 0, h, uvS, tintOf(skin.color, 0.74));
-              // 墙体占格 → 该格地面被压住，不生成（省 ~15% 地面三角形）
-              continue;
             }
-            const ty = floor ? (floor[i] || 0) : 0;
-            const fskin = FLOOR_SKIN[ty] || FLOOR_SKIN[0];
-            const fuv = atlasUVC(fskin.map || 'grass_top');
-            // 三层色差：两个不同尺度的平滑噪声给"成片的深浅"，逐格高频给细节。
-            // 色差只留极轻一档：Minecraft 在同一个 biome 内草地颜色是完全一致的，
-            // 原版纹理本身已带像素噪点，再叠大振幅色差反而"不像"。
-            const n1 = vnoise(x * 0.13, z * 0.13, 7);
-            const n2 = vnoise(x * 0.34, z * 0.31, 23);
-            const hi = (((x >> 1) * 73856093) ^ ((z >> 1) * 19349663)) & 255;
-            const fk = 0.96 + n1 * 0.05 + n2 * 0.035 + (hi / 255) * 0.025;
-
-            /* 顶点级 AO（Minecraft 的 smooth lighting）：贴墙/贴树的那个角压暗。
-               整格统一压暗是没用的 —— 必须按角算，墙体根部才会出现"建筑落在地上"
-               的接触阴影。地面占画面一半，这是"画面发平"最直接的解药。
-               ⚠️ 必须在下面的水判断之前算好：水面也要吃 AO（岸边水更暗）。 */
-            const sN = solidAt(x, z - 1) ? 1 : 0, sS = solidAt(x, z + 1) ? 1 : 0;
-            const sW = solidAt(x - 1, z) ? 1 : 0, sE = solidAt(x + 1, z) ? 1 : 0;
-            const a0 = 1 - 0.30 * (sN + sW) - 0.15 * (solidAt(x - 1, z - 1) ? 1 : 0);
-            const a1 = 1 - 0.30 * (sW + sS) - 0.15 * (solidAt(x - 1, z + 1) ? 1 : 0);
-            const a2 = 1 - 0.30 * (sE + sS) - 0.15 * (solidAt(x + 1, z + 1) ? 1 : 0);
-            const a3 = 1 - 0.30 * (sN + sE) - 0.15 * (solidAt(x + 1, z - 1) ? 1 : 0);
-
-            /* 水面：Minecraft 的水面低于方块顶面 1/8 格（water 方块高 14/16），
-               并且有随位置的波纹明暗。不做这两件事，水就是"一块蓝色塑料板"，
-               这是"像不像 MC"在湖边的第一眼判据。
-               WATER_DROP = 0.125 格 = 1/8，原版就是 14/16 高度。 */
-            if (ty === 5) {
-              // 波纹：两个不同尺度的噪声叠加，只轻微改明暗（±6%），
-              // 幅度大了会变成"脏水面"，原版水面是很干净的。
-              const w1 = vnoise(x * 0.21, z * 0.19, 131);
-              const w2 = vnoise(x * 0.57, z * 0.61, 977);
-              const wk = 0.94 + w1 * 0.08 + w2 * 0.05;
-              pushTop(fP, fN, fU, fC, x, -0.125, z, x + 1, z + 1, fuv,
-                tintOf(fskin.color, wk), 0, [a0, a1, a2, a3]);
-              continue;
-            }
-
-            // 不做 UV 旋转：Minecraft 的方块纹理朝向是固定的，一片草地就是
-            // 同一个 16×16 图案重复 —— 这正是它的样子，随机旋转反而"不像"。
-            pushTop(fP, fN, fU, fC, x, 0, z, x + 1, z + 1, fuv,
-              tintOf(fskin.color, fk), 0, [a0, a1, a2, a3]);
           }
         }
 
-        const chunk = { x0, z0, x1, z1, cx, cz, walls: null, floor: null };
-        if (wP.length) {
-          const m = new THREE.Mesh(makeGeo(wP, wN, wU, wC), mat);
-          m.name = `walls_${cx}_${cz}`;
+        const chunk = { x0, z0: y0, x1, z1: y1, cx, cz, solid: null, blend: null };
+        if (oP.length) {
+          const m = new THREE.Mesh(makeGeo(oP, oN, oU, oC), mat);
+          m.name = `vox_${cx}_${cz}`;
           m.castShadow = true;
           m.receiveShadow = true;
           m.matrixAutoUpdate = false;
           m.updateMatrix();
           worldGroup.add(m);
-          chunk.walls = m;
+          chunk.solid = m;
         }
-        if (fP.length) {
-          const m = new THREE.Mesh(makeGeo(fP, fN, fU, fC), mat);
-          m.name = `floor_${cx}_${cz}`;
+        if (bP.length) {
+          const m = new THREE.Mesh(makeGeo(bP, bN, bU, bC), bmat);
+          m.name = `water_${cx}_${cz}`;
           m.castShadow = false;
-          m.receiveShadow = true;
+          m.receiveShadow = false;
+          m.renderOrder = 1;
           m.matrixAutoUpdate = false;
           m.updateMatrix();
           worldGroup.add(m);
-          chunk.floor = m;
+          chunk.blend = m;
         }
-        if (chunk.walls || chunk.floor) chunks.push(chunk);
+        if (chunk.solid || chunk.blend) chunks.push(chunk);
       }
-    }
-
-    try {
-      const arch = buildArchitecture(Wd);
-      arch.matrixAutoUpdate = false;
-      arch.updateMatrix();
-      arch.traverse((o) => { o.matrixAutoUpdate = false; o.updateMatrix(); });
-      worldGroup.add(arch);
-    } catch (err) {
-      if (typeof console !== 'undefined') console.warn('arch', err);
     }
   }
 
@@ -658,8 +711,8 @@ import { buildArchitecture } from '../three/architecture.js';
       const dz = Math.max(c.z0 - camZ, 0, camZ - c.z1);
       const near = Math.sqrt(dx * dx + dz * dz);
       const vis = near < lim;
-      if (c.walls) c.walls.visible = vis;
-      if (c.floor) c.floor.visible = vis;
+      if (c.solid) c.solid.visible = vis;
+      if (c.blend) c.blend.visible = vis;
     }
   }
 
@@ -831,8 +884,11 @@ import { buildArchitecture } from '../three/architecture.js';
     camShake = (G.shake || 0) * 0.15 + (G.kickPitch || 0) * 0.05;
     const viewY = (G.viewOffsetY || 0) * 0.002;
 
+    /* 相机高度 = 玩家脚下的 z + 视高（真 3D：地形有高低，相机必须跟着海拔走）。
+       不加上 camObj.z 的话，站在山坡上眼睛还埋在地平面里。 */
+    const footZ = (camObj.z !== undefined && camObj.z !== null) ? camObj.z : 0;
     const camX = camObj.x;
-    const camY = eye + viewY + (camShake > 0.001 ? (Math.random() - 0.5) * camShake * 0.3 : 0);
+    const camY = footZ + eye + viewY + (camShake > 0.001 ? (Math.random() - 0.5) * camShake * 0.3 : 0);
     const camZ = camObj.y;
 
     camera.position.set(camX, camY, camZ);
@@ -842,8 +898,8 @@ import { buildArchitecture } from '../three/architecture.js';
 
     // 光照跟随（阴影贴图只覆盖 ±30，必须跟着玩家走）
     // 偏移默认 (30,34,20) ≈ 43° 仰角，与 init 里的 sun.position 同向
-    sun.position.set(camX + R.sunOffset.x, R.sunOffset.y, camZ + R.sunOffset.z);
-    sun.target.position.set(camX, 0, camZ);
+    sun.position.set(camX + R.sunOffset.x, footZ + R.sunOffset.y, camZ + R.sunOffset.z);
+    sun.target.position.set(camX, footZ, camZ);
     sun.target.updateMatrixWorld();
     if (skyMesh) skyMesh.position.copy(camera.position);
     if (skyMat) {
@@ -890,7 +946,9 @@ import { buildArchitecture } from '../three/architecture.js';
       mesh.visible = true;
       const dead = e.state === 'dead';
       const mode = dead ? 'dead' : (e.windup > 0 ? 'attack' : (e.hurt > 0 ? 'hurt' : 'walk'));
-      mesh.position.set(e.x, e.z0 || 0, e.y);
+      // sim.z 是脚下的高度（真 3D）；缺字段时退回地形高度，至少不会埋进地里
+      const fz = (e.z !== undefined && e.z !== null) ? e.z : PP.World.surfZAt(e.x, e.y);
+      mesh.position.set(e.x, fz, e.y);
       const face = e.face !== undefined ? e.face : (e.a !== undefined ? e.a : yaw);
       mesh.rotation.y = Math.PI / 2 - face;
       if (e.type === 'spider') animateSpider(mesh, tSec, dead ? 0 : 1);
@@ -907,7 +965,7 @@ import { buildArchitecture } from '../three/architecture.js';
       let ent = entityPool.get(id) || makeEntity(id, buildPlayer(m.colorIdx || 0));
       activeIds.add(id);
       ent.mesh.visible = true;
-      ent.mesh.position.set(m.x, 0, m.y);
+      ent.mesh.position.set(m.x, (m.z !== undefined && m.z !== null) ? m.z : 0, m.y);
       ent.mesh.rotation.y = Math.PI / 2 - (m.a || 0);
       const mode = m.downed ? 'dead' : (m.fireT > 0 ? 'attack' : 'walk');
       animateHumanoid(ent.mesh, tSec, m.downed ? 0 : 1, mode);

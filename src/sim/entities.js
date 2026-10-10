@@ -20,31 +20,31 @@
   E.TYPES = {
     zombie: {
       key: 'zombie', hp: 40, speed: 2.30, radius: 0.30,
-      height: 1.80, z0: 0,
+      height: 1.80,
       dmg: 9, atkRange: 1.05, atkCd: 0.85, windup: 0.32,
       score: 100, ranged: false, mass: 1, xp: 12
     },
     husk: {
       key: 'husk', hp: 140, speed: 1.34, radius: 0.42,
-      height: 1.80, z0: 0,
+      height: 1.80,
       dmg: 24, atkRange: 1.30, atkCd: 1.30, windup: 0.45,
       score: 260, ranged: false, mass: 3, xp: 34
     },
     skeleton: {
       key: 'skeleton', hp: 44, speed: 1.65, radius: 0.32,
-      height: 1.80, z0: 0,
+      height: 1.80,
       dmg: 12, atkRange: 999, atkCd: 1.85, windup: 0.42,
       score: 190, ranged: true, shootRange: 12, projSpeed: 7.2, mass: 1, xp: 20
     },
     creeper: {
       key: 'creeper', hp: 55, speed: 2.05, radius: 0.32,
-      height: 1.46, z0: 0,
+      height: 1.46,
       dmg: 38, atkRange: 1.55, atkCd: 99, windup: 0.95,
       score: 220, ranged: false, explode: true, blastR: 2.6, mass: 2, xp: 28
     },
     spider: {
       key: 'spider', hp: 26, speed: 3.55, radius: 0.24,
-      height: 0.90, z0: 0,
+      height: 0.90,
       dmg: 5, atkRange: 0.95, atkCd: 0.42, windup: 0.16,
       score: 130, ranged: false, mass: 0.7, xp: 15
     }
@@ -57,7 +57,7 @@
       id: PP.Core.uid(), type: typeKey, T: T,
       x: x, y: y,
       hp: T.hp, maxHp: T.hp,
-      radius: T.radius, height: T.height, z0: T.z0,
+      radius: T.radius, height: T.height,
       state: 'alive',
       cd: 0.6 + G.rng.next() * 0.6, windup: 0, hurt: 0, deadT: 0,
       anim: G.rng.next() * 6.28, bob: 0,
@@ -66,6 +66,10 @@
       burn: 0, burnDps: 0, lastKiller: 0, slow: 0,
       tp: null, ti: 0, retarget: 0
     };
+    // z 轴物理初值（真 3D）：不初始化会让第一帧 tickZ 判定为"从天而降"
+    const w0 = W();
+    e.z = w0.surfZAt ? w0.surfZAt(x, y) : 0;
+    e.vz = 0; e.onGround = true; e.grounded = true; e.stuckT = 0;
     G.enemies.push(e);
     return e;
   };
@@ -135,7 +139,10 @@
       const a = G.rng.next() * Math.PI * 2;
       const sp = 0.6 + G.rng.next() * 2.4;
       G.particles.push({
-        x: e.x, y: e.y, z: e.z0 + e.height * (0.3 + G.rng.next() * 0.5),
+        /* ⚠️ 真 3D：血雾要从敌人**实际的高度**冒出来。这里原先用 e.z0（恒 0 的
+           旧 2.5D 遗留字段），敌人站在山崖/屋顶上时被击杀，血会从十几米下的
+           地面喷出来。玩家掉不觉察，但对比起 Ia live 的感觉是很明显的。 */
+        x: e.x, y: e.y, z: (e.z || 0) + e.height * (0.3 + G.rng.next() * 0.5),
         vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: 1.2 + G.rng.next() * 2.4,
         life: 0.5 + G.rng.next() * 0.5, size: G.rng.chance(0.3) ? 1.6 : 1.0,
         tex: G.rng.chance(0.35) ? 'gib' : (G.rng.chance(0.5) ? 'bloodD' : 'blood')
@@ -175,6 +182,19 @@
       if (!w.circleBlocked(o.x, o.y + dy, r)) o.y += dy;
     }
   }
+  /** 垂直物理：敌人也要吃重力，否则会飘在挖开的坑上方 / 站在半空 */
+  function tickEntityZ(o, dt) {
+    const w = W();
+    if (!w.tickZ) return;
+    // 跳跃：卡住时跳一下（MC 的 mob 就是这么爬台阶的）
+    if (o.grounded === false && o.stuckT > 0.5 && o.canJump !== false) {
+      if (w.jump) w.jump(o);
+      o.stuckT = 0;
+    }
+    w.tickZ(o, dt);
+    if (o.onGround) o.grounded = true; else o.grounded = false;
+  }
+  E.tickEntityZ = tickEntityZ;
   E.moveEntity = moveEntity;
 
   /* ---------------- 更新 ---------------- */
@@ -299,6 +319,11 @@
           }
         } else e.stuck = 0;
       }
+      // 垂直物理：敌人也要吃重力（掉进坑、爬上台阶），并统计"卡住时长"用于自动起跳
+      if (ml > 1e-4 && Math.hypot(e.x - (e.px || e.x), e.y - (e.py || e.y)) < 1e-4) e.stuckT += dt;
+      else e.stuckT = 0;
+      e.px = e.x; e.py = e.y;
+      tickEntityZ(e, dt);
 
       // 兜底：长时间无法靠近目标（例如被刷进封闭区）就回收，避免出现"打不完的怪"
       if (e.state === 'alive' && e.tp) {
@@ -388,41 +413,67 @@
     const w = W();
     const a = angle + (G.rng.next() - 0.5) * spread;
     const dx = Math.cos(a), dy = Math.sin(a);
-    const wallD = w.rayWall(shooter.x, shooter.y, dx, dy, range);
-    const tanP = Math.tan(pitch);
-    const hits = [];
-    // 射线起点 = 视高（倒地时贴地），以前写死 0.5 米 —— 那是"人只有 0.98 米高"
-    // 时代的数值，换成 MC 模型后不改就会系统性打偏。
+    const cosP = Math.cos(pitch), sinP = Math.sin(pitch);
+    /* 3D 方向向量（sim 坐标：dz 是高度）。
+       真 3D 下 pitch 必须参与水平分量（cosP）—— 用 2D 的 (cos a, sin a)
+       当水平方向、再单独算 dz 是**近似**，在大俯仰角时会明显偏
+       （抬头 60° 打远处目标，水平方向其实已经被压缩了一半）。 */
+    const rx = dx * cosP, ry = dy * cosP, rz = sinP;
+
+    // 射线起点 = 玩家眼睛的三维坐标（倒地时贴地）
     const eye = shooter.downed ? EYE_LOW : EYE_H;
+    const footZ = (shooter.z !== undefined && shooter.z !== null) ? shooter.z : 0;
+    const ox = shooter.x, oy = shooter.y, oz = footZ + eye;
+
+    /* 地形遮挡用 3D DDA —— 真 3D 下 2D 的 rayWall 会把"前方一座山"判成通路
+       （山的 wall 位都是 0，只有地基那几格是 1），子弹直接穿山。 */
+    let wallD = range;
+    if (w.rayVoxel) wallD = w.rayVoxel(ox, oy, oz, rx, ry, rz, range);
+    else wallD = w.rayWall(ox, oy, dx, dy, range);
+
+    const hits = [];
 
     for (let i = 0; i < G.enemies.length; i++) {
       const e = G.enemies[i];
       if (e.state !== 'alive') continue;
-      const ex = e.x - shooter.x, ey = e.y - shooter.y;
-      const t = ex * dx + ey * dy;
-      if (t <= 0.05 || t > range || t > wallD) continue;
-      const lat = -ex * dy + ey * dx;
-      if (Math.abs(lat) > e.radius * 1.08) continue;
-      const z = eye + tanP * t;
-      const zTop = e.z0 + e.height, zBot = e.z0;
-      if (z < zBot - 0.12 || z > zTop + 0.10) continue;
+      // 轴对齐包围盒 + 射线相交（竖直方向用 e.z 起的 height 高的盒子，
+      // 原来只看 z0 恒为 0 —— 真 3D 下敌人站山顶时子弹从它肚子下面飞过）
+      const ez = (e.z !== undefined && e.z !== null) ? e.z : 0;
+      /* ⚠️ rayBox 的形参顺序是 (x0, y0, z0, x1, y1, z1) —— 末尾三个是数学惯例的
+         "第三轴"，但本项目 sim 里**第三轴 z 是高度、中间那个 y 才是水平第二轴**。
+         曾经按直觉写成 (e.x-r, ez, e.y-r)，把高度塞进水平槽 —— 结果 rayBox 立刻
+         判出"射线在该轴完全位于盒外"，永远返回 null，全场打不中任何东西
+         （击杀 0 / 威胁不涨 / 友伤 0）。写联调测试时务必按顺序 (x, y, z)。 */
+      const t = rayBox(ox, oy, oz, rx, ry, rz,
+        e.x - e.radius, e.y - e.radius, ez,
+        e.x + e.radius, e.y + e.radius, ez + e.height);
+      if (t === null || t <= 0.05 || t > range || t > wallD) continue;
+      const hz = oz + rz * t;
       // 爆头线 0.92：玩家眼高 1.62、人形敌人高 1.8 —— 阈值给 0.70 的话
       // 平视就正好落在"头部"（1.26 以上），变成"不用抬枪也爆头"，爆头失去意义。
       // 0.92×1.8 = 1.66 > 1.62，平视打躯干、稍微上抬才是爆头。
-      hits.push({ kind: 'enemy', e: e, dist: t, head: z >= zBot + e.height * 0.92, x: shooter.x + dx * t, y: shooter.y + dy * t, z: z });
+      hits.push({
+        kind: 'enemy', e: e, dist: t,
+        head: hz >= ez + e.height * 0.92,
+        x: ox + rx * t, y: oy + ry * t, z: hz
+      });
     }
 
     if (G.friendlyFire > 0) {
       for (const p of G.playerList) {
         if (p.id === shooter.id || p.downed || p.eliminated) continue;
-        const ex = p.x - shooter.x, ey = p.y - shooter.y;
-        const t = ex * dx + ey * dy;
-        if (t <= 0.25 || t > range || t > wallD) continue;
-        const lat = -ex * dy + ey * dx;
-        if (Math.abs(lat) > 0.34) continue;
-        const z = eye + tanP * t;
-        if (z < -0.1 || z > PLAYER_H + 0.12) continue;
-        hits.push({ kind: 'player', p: p, dist: t, head: z > PLAYER_H * 0.72, x: shooter.x + dx * t, y: shooter.y + dy * t, z: z });
+        const pz = (p.z !== undefined && p.z !== null) ? p.z : 0;
+        const ph = p.downed ? 0.95 : PLAYER_H;
+        const t = rayBox(ox, oy, oz, rx, ry, rz,
+          p.x - 0.34, p.y - 0.34, pz,
+          p.x + 0.34, p.y + 0.34, pz + ph);
+        if (t === null || t <= 0.25 || t > range || t > wallD) continue;
+        const hz = oz + rz * t;
+        hits.push({
+          kind: 'player', p: p, dist: t,
+          head: hz > pz + ph * 0.86,
+          x: ox + rx * t, y: oy + ry * t, z: hz
+        });
       }
     }
 
@@ -438,9 +489,44 @@
       out.push(h);
     }
     out.wallDist = wallD;
-    out.endX = shooter.x + dx * wallD;
-    out.endY = shooter.y + dy * wallD;
-    out.endZ = 0.5 + tanP * wallD;
+    out.endX = ox + rx * wallD;
+    out.endY = oy + ry * wallD;
+    out.endZ = oz + rz * wallD;
     return out;
   };
+
+  /** 射线 vs 轴对齐包围盒（slab 法）。无交返回 null，否则返回进入距离 t。 */
+  function rayBox(ox, oy, oz, dx, dy, dz, x0, y0, z0, x1, y1, z1) {
+    let tmin = -Infinity, tmax = Infinity;
+    // X
+    if (Math.abs(dx) < 1e-9) { if (ox < x0 || ox > x1) return null; }
+    else {
+      let t1 = (x0 - ox) / dx, t2 = (x1 - ox) / dx;
+      if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
+      if (t1 > tmin) tmin = t1;
+      if (t2 < tmax) tmax = t2;
+      if (tmin > tmax) return null;
+    }
+    // Y（水平面第二轴 = sim 的 y）
+    if (Math.abs(dy) < 1e-9) { if (oy < y0 || oy > y1) return null; }
+    else {
+      let t1 = (y0 - oy) / dy, t2 = (y1 - oy) / dy;
+      if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
+      if (t1 > tmin) tmin = t1;
+      if (t2 < tmax) tmax = t2;
+      if (tmin > tmax) return null;
+    }
+    // Z（高度）
+    if (Math.abs(dz) < 1e-9) { if (oz < z0 || oz > z1) return null; }
+    else {
+      let t1 = (z0 - oz) / dz, t2 = (z1 - oz) / dz;
+      if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
+      if (t1 > tmin) tmin = t1;
+      if (t2 < tmax) tmax = t2;
+      if (tmin > tmax) return null;
+    }
+    if (tmax < 0) return null;
+    return tmin < 0 ? 0 : tmin;                  // 起点在盒内 → t = 0
+  }
+  E.rayBox = rayBox;
 })();
